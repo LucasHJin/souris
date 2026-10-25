@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Souris's iPhone icon: a mouse seen from above, on the app's touch-surface grey. -->
+  <defs>
+    <path id="body" d="M512 164C636 164 722 300 722 540C722 744 634 860 512 860C390 860 302 744 302 540C302 300 388 164 512 164Z"/>
+    <clipPath id="inside"><use href="#body"/></clipPath>
+  </defs>
+  <rect width="1024" height="1024" fill="#2e2e2e"/>
+  <use href="#body" fill="#373737"/>
+  <g fill="none" stroke="#ebebeb" stroke-width="34" stroke-linecap="round" clip-path="url(#inside)">
+    <path d="M260 396Q512 436 764 396"/>
+    <path d="M512 160V416"/>
+  </g>
+  <rect x="484" y="232" width="56" height="116" rx="28" fill="#ebebeb"/>
+  <use href="#body" fill="none" stroke="#ebebeb" stroke-width="34" stroke-linejoin="round"/>
+</svg>
