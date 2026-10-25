@@ -77,9 +77,15 @@ public struct LinkStats: Equatable, Sendable {
 ///   after 6 s (`reconnectTimeout`) the client reconnects, re-browsing when the target is Bonjour.
 /// - With `listensForUSB`, the client also listens on its loopback interface for the Mac's USB
 ///   link (`WireProtocol.usbPort`, TCP framed by `StreamFraming`). When the Mac connects over the
-///   cable, that connection replaces the Wi-Fi one and Bonjour browsing stops. When it closes or
-///   goes silent, the client falls back to Wi-Fi at once. Log packets aren't rate limited over
-///   USB.
+///   cable, that connection replaces the Wi-Fi one. Bonjour browsing carries on in the background,
+///   so when the cable link closes or goes silent the client reconnects over Wi-Fi at once rather
+///   than waiting seconds for peer-to-peer discovery. Log packets aren't rate limited over USB.
+/// - Wi-Fi connections never use a wired interface: the only one a phone has is the cable's
+///   network link, which the USB link already covers and which vanishes the moment the cable is
+///   pulled.
+/// - Until the first welcome on a connection, the hello repeats every `firstHelloInterval`
+///   instead of `helloInterval`, so a hello lost on a link that is just waking up costs a quarter
+///   second rather than a second.
 /// - With a `LogOutbox`, the client logs its network events into it (category `"net"`) and, while
 ///   the latest welcome is `accepted` or `busy` and the Mac is responding, sends log packets one at
 ///   a time: a log packet goes only when no state packet is waiting or in flight, the previous log
@@ -108,6 +114,9 @@ public final class SourisClient: @unchecked Sendable {
     /// How often the hello is repeated. The Mac answers each one, so this is also how soon a
     /// changed approval or a freed controller seat shows up.
     public var helloInterval: Duration = .seconds(1)
+
+    /// How often the hello is repeated before the first welcome on a connection.
+    public var firstHelloInterval: Duration = .milliseconds(250)
 
     /// Silence from the Mac after which the status becomes `.notResponding`.
     public var notRespondingTimeout: Duration = .seconds(3)
@@ -370,7 +379,7 @@ public final class SourisClient: @unchecked Sendable {
     parameters.serviceClass =
       configuration.usesVoiceServiceClass ? .interactiveVoice : .bestEffort
     parameters.includePeerToPeer = configuration.includesPeerToPeer
-    parameters.prohibitedInterfaceTypes = [.cellular]
+    parameters.prohibitedInterfaceTypes = [.cellular, .wiredEthernet]
     return parameters
   }
 
@@ -695,12 +704,9 @@ public final class SourisClient: @unchecked Sendable {
         "remote": .string(incoming.endpoint.debugDescription),
         "replaced": .string(isOnUSB ? "usb" : connection == nil ? "none" : "wifi"),
       ])
-    // No bye: the Mac keeps this phone as the controller and carries on over the new flow.
+    // No bye: the Mac keeps this phone as the controller and carries on over the new flow. The
+    // browser keeps running so the Wi-Fi endpoint is ready for a fallback.
     detachConnection()?.cancel()
-    browserToken += 1
-    browser?.cancel()
-    browser = nil
-    endpoints.removeAll()
     retryAt = nil
     isOnUSB = true
     setStatus(.connecting, reason: "the Mac connected over USB")
@@ -715,11 +721,13 @@ public final class SourisClient: @unchecked Sendable {
     switch configuration.target {
     case .bonjour:
       setStatus(.searching, reason: "USB link closed: \(reason)")
-      startBrowser()
+      if browser == nil {
+        startBrowser()
+      }
     case .host:
       setStatus(.connecting, reason: "USB link closed: \(reason)")
-      connectIfPossible()
     }
+    connectIfPossible()
   }
 
   // MARK: - Receiving
@@ -823,7 +831,8 @@ public final class SourisClient: @unchecked Sendable {
 
   private func sendHello() {
     sendTracked(helloData, kind: "hello")
-    nextHelloAt = .now + configuration.helloInterval
+    let interval = welcome == nil ? configuration.firstHelloInterval : configuration.helloInterval
+    nextHelloAt = .now + interval
   }
 
   private func sendPing() {

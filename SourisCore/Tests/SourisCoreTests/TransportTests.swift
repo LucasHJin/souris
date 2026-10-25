@@ -1395,8 +1395,9 @@ struct TransportTests {
       usbMac.states.contains { $0.state.cursor.x == 42 }
     }
 
+    // Back on Wi-Fi within a second, not after a retry delay or a fresh discovery.
     usbMac.cancel()
-    try await client.waitForStatus(.connected(macName: macName))
+    try await client.waitForStatus(.connected(macName: macName), timeout: .seconds(1))
     #expect(!client.client.stats.isUSB)
   }
 
