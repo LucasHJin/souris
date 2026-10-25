@@ -32,6 +32,11 @@ final class EventPoster {
   /// Scroll pixels not yet posted because events carry whole pixels only.
   private var scrollRemainder = SIMD2<Double>.zero
 
+  /// Movement not yet reported in the events' delta fields, which carry whole points like a real
+  /// mouse's counts. Games read those deltas and often truncate fractions, so slow aiming (a
+  /// fraction of a point per event) would otherwise never register.
+  private var deltaRemainder = SIMD2<Double>.zero
+
   private(set) var counters = PostCounters()
 
   init(clickInterval: TimeInterval, displayLayout: DisplayLayout) {
@@ -58,6 +63,7 @@ final class EventPoster {
   func reset() {
     cursorTracker.reset()
     scrollRemainder = .zero
+    deltaRemainder = .zero
     heldButtons = []
   }
 
@@ -80,12 +86,21 @@ final class EventPoster {
     else { return }
     // Synthesized events leave the delta fields at zero; apps that read them (games, some
     // canvases) would otherwise see a cursor that doesn't move.
-    event.setDoubleValueField(.mouseEventDeltaX, value: target.x - origin.x)
-    event.setDoubleValueField(.mouseEventDeltaY, value: target.y - origin.y)
+    let delta = takeWholePoints(adding: SIMD2(target.x - origin.x, target.y - origin.y))
+    event.setIntegerValueField(.mouseEventDeltaX, value: Int64(delta.x))
+    event.setIntegerValueField(.mouseEventDeltaY, value: Int64(delta.y))
     event.post(tap: .cghidEventTap)
     counters.moves += 1
     counters.travel += hypot(target.x - origin.x, target.y - origin.y)
     counters.resyncs = cursorTracker.resyncCount
+  }
+
+  /// Adds `delta` to the carried movement and returns the whole points, keeping the rest.
+  private func takeWholePoints(adding delta: SIMD2<Double>) -> SIMD2<Int32> {
+    let total = deltaRemainder + delta
+    let whole = SIMD2(total.x.rounded(.towardZero), total.y.rounded(.towardZero))
+    deltaRemainder = total - whole
+    return SIMD2(Self.clampedInt32(whole.x), Self.clampedInt32(whole.y))
   }
 
   /// Where the cursor was before this move, for the event's delta fields.

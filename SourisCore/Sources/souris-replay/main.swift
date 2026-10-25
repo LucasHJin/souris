@@ -159,6 +159,14 @@ func describe(_ event: PipelineEvent) -> String {
     kind = isPaused ? "paused" : "unpaused"
   case .recentered:
     kind = "recentered"
+  case .predictionChecked(let sign, let correlation):
+    if let sign {
+      kind = "prediction on: acceleration sign \(format(sign, 0)), correlation "
+        + format(correlation, 2)
+    } else {
+      kind = "prediction off: Core Motion never matched ARKit (correlation "
+        + "\(format(correlation, 2)))"
+    }
   }
   return "\(format(event.time, 3))  \(kind)"
 }
@@ -184,11 +192,17 @@ func run(_ options: Options) throws {
   var imuTimes: [TimeInterval] = []
   var limitedFrames = 0
   var jitters: [Double] = []
+  var predictionErrors: [Double] = []
+  var predictionLeads: [Double] = []
   for (event, step) in zip(events, steps) {
     switch event {
     case .ar(let sample):
       arTimes.append(sample.timestamp)
       jitters.append(step.diagnostics.jitterMm)
+      if step.diagnostics.prediction == .on {
+        predictionErrors.append(step.diagnostics.predictionErrorMm)
+        predictionLeads.append(step.diagnostics.predictionLeadMm)
+      }
       if step.state.flags.contains(.trackingLimited) {
         limitedFrames += 1
       }
@@ -239,6 +253,9 @@ func run(_ options: Options) throws {
   print("clicks         \(clicks)")
   print("jitter         p50 \(format(quantile(jitters, 0.5), 2)) mm, "
     + "p95 \(format(quantile(jitters, 0.95), 2)) mm")
+  print("prediction     \(finalDiagnostics.prediction.rawValue), error p50 "
+    + "\(format(quantile(predictionErrors, 0.5), 2)) mm, lead p95 "
+    + "\(format(quantile(predictionLeads, 0.95), 1)) mm")
   print("rejected jumps \(finalDiagnostics.rejectedJumps)")
   print("limited frames \(limitedFrames) of \(arTimes.count)")
   let gateTotal = finalDiagnostics.gateSeconds.total
@@ -265,7 +282,8 @@ func run(_ options: Options) throws {
   }
 
   if let csv = options.csv {
-    var text = "time,cursorX,cursorY,scrollY,buttons,flags,speed,gain,jitter,gate\n"
+    var text = "time,cursorX,cursorY,scrollY,buttons,flags,speed,gain,jitter,gate,"
+      + "predictionLead,predictionError\n"
     for step in steps {
       let fields = [
         format(step.time, 6),
@@ -278,6 +296,8 @@ func run(_ options: Options) throws {
         format(step.diagnostics.gain, 4),
         format(step.diagnostics.jitterMm, 4),
         step.diagnostics.cursorGate.rawValue,
+        format(step.diagnostics.predictionLeadMm, 3),
+        format(step.diagnostics.predictionErrorMm, 3),
       ]
       text += fields.joined(separator: ",") + "\n"
     }

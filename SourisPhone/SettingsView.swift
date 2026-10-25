@@ -73,13 +73,16 @@ struct SettingsView: View {
         displayFactor: 100,
         unit: " cm")
       Toggle("Gyro assist", isOn: $model.settings.pipeline.pointer.gyroAssist)
+      Toggle("Motion prediction", isOn: $model.settings.pipeline.prediction.isEnabled)
     } header: {
       Text("Pointer")
     } footer: {
       Text(
         "A lower Smoothing cutoff steadies the pointer at rest but adds lag. Higher "
           + "Responsiveness cuts that lag when moving fast. Swivel reach is how far ahead of the "
-          + "camera the sensing point sits.")
+          + "camera the sensing point sits. Motion prediction uses the accelerometer to move the "
+          + "pointer to where the phone is now, not where the camera saw it about 40 ms ago; it "
+          + "switches itself on after a second or so of moving.")
     }
   }
 
@@ -131,14 +134,6 @@ struct SettingsView: View {
   private var clicksSection: some View {
     Section {
       SliderRow(
-        title: "Right-click window",
-        value: $model.settings.touch.twoFingerWindow,
-        range: 0.02...0.12,
-        step: 0.005,
-        displayFactor: 1000,
-        fractionDigits: 0,
-        unit: " ms")
-      SliderRow(
         title: "Click freeze",
         value: $model.settings.pipeline.click.freezeDuration,
         range: 0...0.2,
@@ -150,7 +145,9 @@ struct SettingsView: View {
     } header: {
       Text("Clicks")
     } footer: {
-      Text("A second finger landing inside the right-click window makes a right click.")
+      Text(
+        "Tap the left half of the top area to left-click and the right half to right-click. Two "
+          + "quick taps on the left half double-click.")
     }
   }
 
@@ -167,12 +164,21 @@ struct SettingsView: View {
         displayFactor: 100,
         unit: " cm")
         .disabled(!model.settings.pipeline.lift.isEnabled)
+      SliderRow(
+        title: "Max rollback",
+        value: $model.settings.pipeline.lift.rollbackLimit,
+        range: 0...200,
+        step: 5,
+        fractionDigits: 0,
+        unit: " pt")
+        .disabled(!model.settings.pipeline.lift.isEnabled)
     } header: {
       Text("Lift to reposition")
     } footer: {
       Text(
         "Lift the phone quickly to pause the pointer, like lifting a mouse. Set it down to "
-          + "resume.")
+          + "resume. A lift takes back the pointer motion the rise itself caused, up to Max "
+          + "rollback; 0 turns that off.")
     }
   }
 
@@ -213,15 +219,37 @@ struct SettingsView: View {
 
   private var networkSection: some View {
     Section {
+      Toggle(isOn: $model.settings.usesBluetooth) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Bluetooth")
+          if model.settings.usesBluetooth {
+            Text(bluetoothStatus)
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
       Toggle("Peer-to-peer Wi-Fi", isOn: $model.settings.includesPeerToPeer)
       Toggle("Wi-Fi voice priority", isOn: $model.settings.usesVoiceServiceClass)
     } header: {
       Text("Network")
     } footer: {
       Text(
-        "Peer-to-peer is only for networks that stop devices seeing each other. Also turn it on "
-          + "in the Mac menu. It adds latency. Voice priority sends packets in the Wi-Fi voice "
-          + "queue.")
+        "Without the cable, Bluetooth gives steadier timing than busy Wi-Fi; turn it off if "
+          + "Wi-Fi works better where you are. It needs Use Bluetooth on in the Mac menu too. "
+          + "Peer-to-peer is only for networks that stop devices seeing each other. Also turn it "
+          + "on in the Mac menu. It adds latency. Voice priority sends packets in the Wi-Fi "
+          + "voice queue.")
+    }
+  }
+
+  private var bluetoothStatus: String {
+    switch model.snapshot.bluetoothState {
+    case .stopped: "Off"
+    case .unavailable(let reason): "Unavailable: Bluetooth is \(reason)"
+    case .advertising: "Waiting for the Mac"
+    case .connected:
+      model.snapshot.linkStats.transport == .bluetooth ? "Carrying the link" : "Linked, standing by"
     }
   }
 

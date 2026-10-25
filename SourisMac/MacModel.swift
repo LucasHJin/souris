@@ -32,10 +32,16 @@ final class MacModel {
   private(set) var approvedDeviceIDs: Set<UUID>
   private(set) var acceptsConnections: Bool
   private(set) var allowsPeerToPeer: Bool
+  private(set) var pointerPacing: PointerPacing
+  private(set) var usesBluetooth: Bool
   private(set) var usbState = USBBridgeState.stopped
+  private(set) var bluetoothState = BluetoothCentralState.stopped
 
   /// The controlling phone's packets are coming over the USB cable.
   private(set) var isControllerOnUSB = false
+
+  /// The controlling phone's packets are coming over Bluetooth.
+  private(set) var isControllerOnBluetooth = false
 
   /// Phones waiting for an answer. The first one is the one the alert is about.
   private var approvalQueue: [PeerInfo] = []
@@ -47,8 +53,10 @@ final class MacModel {
   @ObservationIgnored private let macName: String
   @ObservationIgnored private let displayLayout: DisplayLayout
   @ObservationIgnored private let inputController: InputController
+  @ObservationIgnored private let frameClock: FrameClock
   @ObservationIgnored private var server: SourisServer?
   @ObservationIgnored private var usbBridge: USBBridge?
+  @ObservationIgnored private var bluetoothBridge: BluetoothCentralBridge?
 
   /// Bumped whenever a server is started or stopped, so late reports from an old one are ignored.
   @ObservationIgnored private var generation = 0
@@ -65,11 +73,16 @@ final class MacModel {
     self.log = log
     self.displayLayout = displayLayout
     macName = SystemInfo.computerName()
-    inputController = InputController(
-      clickInterval: NSEvent.doubleClickInterval, displayLayout: displayLayout, log: log)
+    let inputController = InputController(
+      clickInterval: NSEvent.doubleClickInterval, displayLayout: displayLayout,
+      pacing: preferences.pointerPacing, log: log)
+    self.inputController = inputController
+    frameClock = FrameClock { inputController.displayFrame() }
     approvedDeviceIDs = preferences.approvedDeviceIDs
     acceptsConnections = preferences.acceptsConnections
     allowsPeerToPeer = preferences.allowsPeerToPeer
+    pointerPacing = preferences.pointerPacing
+    usesBluetooth = preferences.usesBluetooth
   }
 
   // MARK: - Derived menu content
@@ -88,7 +101,20 @@ final class MacModel {
     case .failed(let reason): return "Can’t listen: \(reason)"
     case .listening:
       guard isConnected else { return "Waiting for iPhone…" }
-      return isControllerOnUSB ? "Connected over USB" : "Connected to iPhone"
+      if isControllerOnUSB { return "Connected over USB" }
+      if isControllerOnBluetooth { return "Connected over Bluetooth" }
+      return "Connected to iPhone"
+    }
+  }
+
+  /// The Bluetooth link's state, when it isn't carrying the connection but is worth knowing.
+  var bluetoothDetail: String? {
+    guard acceptsConnections, usesBluetooth, !isControllerOnBluetooth else { return nil }
+    switch bluetoothState {
+    case .unavailable(let reason): return "Bluetooth: \(reason)"
+    case .connecting: return "Bluetooth: connecting…"
+    case .connected: return isControllerOnUSB ? nil : "Bluetooth: linked"
+    case .stopped, .searching: return nil
     }
   }
 
@@ -184,6 +210,27 @@ final class MacModel {
     }
   }
 
+  func setUsesBluetooth(_ isOn: Bool) {
+    guard isOn != usesBluetooth else { return }
+    log.log(.info, "menu", "bluetooth", nil, ["on": .bool(isOn)])
+    usesBluetooth = isOn
+    preferences.usesBluetooth = isOn
+    if case .listening(let port) = serverState, isOn {
+      startBluetoothBridge(serverPort: port)
+    } else {
+      stopBluetoothBridge()
+    }
+  }
+
+  func setPointerPacing(_ pacing: PointerPacing) {
+    guard pacing != pointerPacing else { return }
+    log.log(.info, "menu", "pointerPacing", nil, ["pacing": .string(pacing.rawValue)])
+    pointerPacing = pacing
+    preferences.pointerPacing = pacing
+    inputController.setPacing(pacing)
+    updateFrameClock()
+  }
+
   func disconnectController() {
     log.log(.info, "menu", "disconnect", "Disconnect iPhone chosen")
     server?.disconnectController()
@@ -258,7 +305,9 @@ final class MacModel {
     server?.stop()
     server = nil
     usbBridge?.stop()
+    stopBluetoothBridge()
     isControllerOnUSB = false
+    isControllerOnBluetooth = false
     inputController.reset()
     serverState = .stopped
     controller = nil
@@ -266,6 +315,16 @@ final class MacModel {
     packetsPerSecond = 0
     lossFraction = 0
     dismissApprovals()
+    updateFrameClock()
+  }
+
+  /// The display link runs only while a phone is moving the pointer through the playout.
+  private func updateFrameClock() {
+    if isConnected && pointerPacing != .immediate {
+      frameClock.start()
+    } else {
+      frameClock.stop()
+    }
   }
 
   private func handle(_ report: InputReport, generation reportGeneration: Int) {
@@ -286,6 +345,9 @@ final class MacModel {
       case .listening(let port):
         refreshLocalAddress()
         usbBridge?.start(serverPort: port)
+        if usesBluetooth {
+          startBluetoothBridge(serverPort: port)
+        }
       case .starting:
         break
       }
@@ -303,6 +365,7 @@ final class MacModel {
     case .controllerResumed:
       isControllerSilent = false
     }
+    updateFrameClock()
   }
 
   // MARK: - USB
@@ -322,6 +385,33 @@ final class MacModel {
         }
       }
     }
+  }
+
+  // MARK: - Bluetooth
+
+  /// Created on first use, so the Bluetooth permission prompt only appears with the setting on.
+  private func startBluetoothBridge(serverPort: UInt16) {
+    if bluetoothBridge == nil {
+      let log = log
+      bluetoothBridge = BluetoothCentralBridge { [weak self] event in
+        switch event {
+        case .log(let entry):
+          log.write(entry)
+        case .stateChanged(let state):
+          DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+              self?.bluetoothState = state
+            }
+          }
+        }
+      }
+    }
+    bluetoothBridge?.start(serverPort: serverPort)
+  }
+
+  private func stopBluetoothBridge() {
+    bluetoothBridge?.stop()
+    isControllerOnBluetooth = false
   }
 
   // MARK: - Approval
@@ -367,8 +457,11 @@ final class MacModel {
     let center = NotificationCenter.default
     let screens = center.addObserver(
       forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-    ) { [displayLayout] _ in
+    ) { [displayLayout, weak self] _ in
       displayLayout.refresh()
+      MainActor.assumeIsolated {
+        self?.frameClock.restart()
+      }
     }
     let terminating = center.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: .main
@@ -412,6 +505,8 @@ final class MacModel {
         "accessibility": .bool(isAccessibilityGranted),
         "acceptsConnections": .bool(acceptsConnections),
         "peerToPeer": .bool(allowsPeerToPeer),
+        "pointerPacing": .string(pointerPacing.rawValue),
+        "bluetooth": .bool(usesBluetooth),
         "approvedDevices": .int(approvedDeviceIDs.count),
         "doubleClickInterval": .double(NSEvent.doubleClickInterval),
       ])
@@ -431,9 +526,12 @@ final class MacModel {
     tickCount += 1
 
     let onUSB = isConnected && (usbBridge?.isRelaying ?? false)
-    if onUSB != isControllerOnUSB {
+    let onBluetooth = isConnected && !onUSB && (bluetoothBridge?.isRelaying ?? false)
+    if onUSB != isControllerOnUSB || onBluetooth != isControllerOnBluetooth {
       isControllerOnUSB = onUSB
-      log.log(.info, "app", "transport", nil, ["usb": .bool(onUSB)])
+      isControllerOnBluetooth = onBluetooth
+      log.log(
+        .info, "app", "transport", nil, ["usb": .bool(onUSB), "bluetooth": .bool(onBluetooth)])
     }
 
     if isConnected {

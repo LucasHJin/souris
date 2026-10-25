@@ -3,9 +3,6 @@ import Foundation
 
 /// Tunables for the touch surface.
 public struct TouchSettings: Codable, Equatable, Sendable {
-  /// A second touch landing within this many seconds of the first makes a right click.
-  public var twoFingerWindow: TimeInterval = 0.05
-
   /// The fraction of the surface's height, from the top, that accepts touches. The rest is where
   /// the palm rests and is ignored.
   public var acceptedFraction: Double = 0.5
@@ -26,47 +23,31 @@ public struct TouchSettings: Codable, Equatable, Sendable {
 /// - A touch is accepted when it begins in the top `acceptedFraction` of the surface and outside
 ///   the side bands. Touches that begin anywhere else are ignored for their whole life: they emit
 ///   nothing and never count as a finger.
-/// - With no button held, the first accepted touch emits `.contact` and opens the two-finger
-///   window. A second accepted touch inside the window emits `.contact` and a right press at its
-///   own time. If the window closes first, a left press is emitted with the window's deadline as
-///   its time (from `advance(to:)`).
-/// - If the first touch lifts before the window closes, the left press is emitted at the lift's
-///   time, followed by `.contact`, and the release is due `minimumPressDuration` later.
-/// - Accepted touches that begin while a button is held, or while the window is open after a
-///   second finger, are extras: ignored for their whole life.
-/// - A button is released when every touch that started it has lifted, emitting `.contact` at the
-///   lift and the release at the lift's time, or at press time + `minimumPressDuration` if that is
+/// - The accepted area is split down the middle: a touch that begins in the left half is the left
+///   button, one in the right half the right button. Its `.contact` and press are emitted at once,
+///   at the touch's time.
+/// - A touch that begins in a half whose button is already held (or whose release is still
+///   pending) is an extra: ignored for its whole life. The two buttons are independent, so one
+///   finger in each half holds both.
+/// - A button is released when the touch that pressed it lifts, emitting `.contact` at the lift
+///   and the release at the lift's time, or at press time + `minimumPressDuration` if that is
 ///   later (then from `advance(to:)`).
 /// - Cancelled touches are treated as lifts.
 public struct TouchClassifier: Sendable {
   public var settings: TouchSettings
 
-  /// Where the gesture is. The touches it depends on are in `owners`, and a pending release is
-  /// in `scheduledRelease`.
-  private enum Phase {
-    case idle
+  /// A button pressed by a touch that is still down, or whose release is waiting out the minimum
+  /// press duration.
+  private struct Press {
+    /// The touch holding the button, nil once it has lifted.
+    var owner: Int?
+    var pressedAt: TimeInterval
 
-    /// The first accepted touch is down. A left press is due at `deadline` unless a second touch
-    /// joins first.
-    case windowOpen(deadline: TimeInterval)
-
-    /// The button is down. It is released once `owners` is empty and `minimumPressDuration` has
-    /// passed since the press.
-    case buttonHeld(MouseButton, pressedAt: TimeInterval)
+    /// When the release is due, once the owner has lifted before the minimum press duration.
+    var scheduledRelease: TimeInterval?
   }
 
-  private var phase = Phase.idle
-
-  /// Accepted touches that started the open window or the held button and are still down. Any
-  /// other touch is ignored, so it never appears here, and lifting it emits nothing.
-  private var owners: Set<Int> = []
-
-  /// When the held button is released, while its last owner has lifted and the minimum press
-  /// duration hasn't passed yet.
-  private var scheduledRelease: TimeInterval?
-
-  /// The buttons whose press has been emitted and whose release hasn't been.
-  private var emittedButtons: MouseButtons = []
+  private var presses: [MouseButton: Press] = [:]
 
   public init(settings: TouchSettings = TouchSettings()) {
     self.settings = settings
@@ -74,16 +55,12 @@ public struct TouchClassifier: Sendable {
 
   /// Buttons currently pressed, as far as the events emitted so far say.
   public var heldButtons: MouseButtons {
-    emittedButtons
+    presses.keys.reduce(into: MouseButtons()) { $0.insert($1.mask) }
   }
 
   /// The next time `advance(to:)` must be called, or `nil` when nothing is pending.
   public var nextDeadline: TimeInterval? {
-    switch phase {
-    case .idle: nil
-    case .windowOpen(let deadline): deadline
-    case .buttonHeld: scheduledRelease
-    }
+    presses.values.compactMap(\.scheduledRelease).min()
   }
 
   /// Call from `touchesBegan` for each new touch.
@@ -99,62 +76,54 @@ public struct TouchClassifier: Sendable {
     in size: CGSize,
     time: TimeInterval
   ) -> [TouchEvent] {
-    // A second finger may land exactly on the deadline and still count, so an open window only
-    // closes here once the deadline is strictly past.
-    var events = emitDue(by: time, closeWindowAtDeadline: false)
-    guard isAccepted(location, in: size), !owners.contains(id) else { return events }
-
-    switch phase {
-    case .idle:
-      owners.insert(id)
-      phase = .windowOpen(deadline: time + settings.twoFingerWindow)
-      events.append(.contact(time: time))
-
-    case .windowOpen:
-      owners.insert(id)
-      phase = .buttonHeld(.right, pressedAt: time)
-      emittedButtons.insert(.right)
-      events.append(.contact(time: time))
-      events.append(.button(.right, isDown: true, time: time))
-
-    case .buttonHeld:
-      // An extra touch: it stays ignored until it lifts.
-      break
+    var events = advance(to: time)
+    guard isAccepted(location, in: size), !presses.values.contains(where: { $0.owner == id })
+    else { return events }
+    let button = Self.button(at: location, in: size)
+    guard presses[button] == nil else {
+      // An extra touch on a held button: it stays ignored until it lifts.
+      return events
     }
+    presses[button] = Press(owner: id, pressedAt: time)
+    events.append(.contact(time: time))
+    events.append(.button(button, isDown: true, time: time))
     return events
   }
 
   /// Call from `touchesEnded` and `touchesCancelled` for each lifted touch.
   public mutating func touchEnded(id: Int, time: TimeInterval) -> [TouchEvent] {
-    var events = emitDue(by: time, closeWindowAtDeadline: true)
-    guard owners.remove(id) != nil else { return events }
-
-    if case .windowOpen = phase {
-      // Lifted before the window closed, so this is a quick tap. The press lands at the lift.
-      phase = .buttonHeld(.left, pressedAt: time)
-      emittedButtons.insert(.left)
-      events.append(.button(.left, isDown: true, time: time))
+    var events = advance(to: time)
+    guard let (button, press) = presses.first(where: { $0.value.owner == id }) else {
+      return events
     }
     events.append(.contact(time: time))
-    events += releaseAfterLastOwnerLifts(at: time)
+    let releaseTime = max(time, press.pressedAt + settings.minimumPressDuration)
+    if releaseTime > time {
+      presses[button]?.owner = nil
+      presses[button]?.scheduledRelease = releaseTime
+    } else {
+      events.append(release(button, at: time))
+    }
     return events
   }
 
-  /// Emits every event that's due at or before `time` (window closing, delayed release).
+  /// Emits every release that's due at or before `time`, in time order.
   public mutating func advance(to time: TimeInterval) -> [TouchEvent] {
-    emitDue(by: time, closeWindowAtDeadline: true)
+    let due = presses
+      .compactMap { button, press in
+        press.scheduledRelease.flatMap { $0 <= time ? (button, $0) : nil }
+      }
+      .sorted { ($0.1, $0.0.rawValue) < ($1.1, $1.0.rawValue) }
+    return due.map { button, releaseTime in release(button, at: releaseTime) }
   }
 
-  /// Releases any held button at `time` and forgets every touch, e.g. when the app goes inactive.
-  /// Touches still on the screen stay ignored until they lift.
+  /// Releases every held button at `time` and forgets every touch, e.g. when the app goes
+  /// inactive. Touches still on the screen stay ignored until they lift.
   public mutating func cancelAll(time: TimeInterval) -> [TouchEvent] {
-    var events = emitDue(by: time, closeWindowAtDeadline: true)
-    if case .buttonHeld(let button, _) = phase {
+    var events = advance(to: time)
+    for button in MouseButton.allCases where presses[button] != nil {
       events.append(release(button, at: time))
     }
-    owners = []
-    scheduledRelease = nil
-    phase = .idle
     return events
   }
 
@@ -168,50 +137,13 @@ public struct TouchClassifier: Sendable {
       && location.x <= size.width - band
   }
 
-  /// Emits what is due by `time`, in time order: the left press of a window whose deadline has
-  /// passed, and the release of a button whose scheduled release has come.
-  private mutating func emitDue(
-    by time: TimeInterval,
-    closeWindowAtDeadline: Bool
-  ) -> [TouchEvent] {
-    var events: [TouchEvent] = []
-
-    if case .windowOpen(let deadline) = phase {
-      let closed = closeWindowAtDeadline ? deadline <= time : deadline < time
-      if closed {
-        phase = .buttonHeld(.left, pressedAt: deadline)
-        emittedButtons.insert(.left)
-        events.append(.button(.left, isDown: true, time: deadline))
-      }
-    }
-
-    if case .buttonHeld(let button, _) = phase,
-      let releaseTime = scheduledRelease,
-      releaseTime <= time
-    {
-      events.append(release(button, at: releaseTime))
-    }
-    return events
-  }
-
-  /// Called when the last owner of a held button lifts at `time`. Releases at once if the minimum
-  /// press duration has already passed, otherwise schedules the release for when it has.
-  private mutating func releaseAfterLastOwnerLifts(at time: TimeInterval) -> [TouchEvent] {
-    guard owners.isEmpty, case .buttonHeld(let button, let pressedAt) = phase else {
-      return []
-    }
-    let releaseTime = max(time, pressedAt + settings.minimumPressDuration)
-    if releaseTime > time {
-      scheduledRelease = releaseTime
-      return []
-    }
-    return [release(button, at: releaseTime)]
+  /// The button for a touch at `location`: left of the middle is left, the rest right.
+  static func button(at location: CGPoint, in size: CGSize) -> MouseButton {
+    location.x < size.width / 2 ? .left : .right
   }
 
   private mutating func release(_ button: MouseButton, at time: TimeInterval) -> TouchEvent {
-    emittedButtons.subtract(button.mask)
-    scheduledRelease = nil
-    phase = .idle
+    presses[button] = nil
     return .button(button, isDown: false, time: time)
   }
 }

@@ -53,17 +53,19 @@ import simd
     // The cursor wobbles with the jitter but doesn't wander: the mean of the last second stays
     // near the mean of the first. The tap's filter restart re-bases on a smoothed point that
     // still carries about 0.5 mm of jitter, so allow about 2 mm (1 mm is 2.5 pt at slow gain).
+    // The 0.2° orientation noise swings the 10 cm sensor reach by another 0.35 mm, so every bound
+    // here leaves about 10% more than the 1 mm position noise alone would need.
     func meanCursor(_ from: Double, _ to: Double) -> SIMD2<Double> {
       let window = steps.filter { $0.time >= from && $0.time < to }.map(\.state.cursor)
       return window.reduce(.zero, +) / Double(window.count)
     }
     let drift = simd_length(meanCursor(4, 5) - meanCursor(0.5, 1.5))
-    #expect(drift < 5, "drift \(drift) pt")
+    #expect(drift < 6, "drift \(drift) pt")
     let resting = steps.filter { $0.time > 0.5 }
     let center = meanCursor(0.5, 5)
     let spread = (resting.map { simd_length_squared($0.state.cursor - center) }.reduce(0, +)
       / Double(resting.count)).squareRoot()
-    #expect(spread < 3, "spread \(spread) pt")
+    #expect(spread < 3.5, "spread \(spread) pt")
     // ARKit delivers the 80 ms window by about 2.5 + 0.08 + 0.045 s; noise alone mustn't end the
     // freeze sooner.
     #expect(Self.freezeEnd(steps, after: 2.5) > 2.6)
@@ -74,7 +76,7 @@ import simd
     let meanSpeed = speeds.reduce(0, +) / Double(speeds.count)
     let slow = settings.pointer.slowGain * settings.pointer.speedScale
     let meanGain = resting.map(\.diagnostics.gain).reduce(0, +) / Double(resting.count)
-    #expect(meanSpeed < settings.pointer.slowSpeed * 0.75, "mean speed \(meanSpeed) mm/s")
+    #expect(meanSpeed < settings.pointer.slowSpeed * 0.85, "mean speed \(meanSpeed) mm/s")
     #expect(meanGain < slow * 1.02, "mean gain \(meanGain)")
     #expect(abs((steps.last?.diagnostics.jitterMm ?? 0) - 1.41) < 0.5)
   }

@@ -30,6 +30,10 @@ final class MouseEngine: @unchecked Sendable {
   private var clientStatus = ClientStatus.stopped
   private var macNames: [String] = []
 
+  /// Relays the client's link over Bluetooth LE while the setting is on and the app runs.
+  private var bluetoothBridge: BluetoothPeripheralBridge?
+  private var bluetoothState = BluetoothPeripheralState.stopped
+
   /// Bumped whenever the client is replaced, so a stopped client's late callbacks are ignored.
   private var clientGeneration = 0
   private var lastSent: MouseState?
@@ -179,6 +183,7 @@ final class MouseEngine: @unchecked Sendable {
       guard isRunning else { return }
       stopClient()
       startClient()
+      updateBluetoothBridge()
     }
   }
 
@@ -236,6 +241,7 @@ final class MouseEngine: @unchecked Sendable {
     }
 
     startClient()
+    updateBluetoothBridge()
     if ARTracker.isSupported {
       videoFormat = arTracker.run(autoFocus: autoFocus, resetTracking: true)
     } else {
@@ -271,6 +277,7 @@ final class MouseEngine: @unchecked Sendable {
     motionTracker.stop()
     arTracker.pause()
     stopClient()
+    updateBluetoothBridge()
     logFile.flush()
     publishSnapshot()
   }
@@ -281,8 +288,10 @@ final class MouseEngine: @unchecked Sendable {
     configuration.target = network.target
     configuration.includesPeerToPeer = network.includesPeerToPeer
     configuration.usesVoiceServiceClass = network.usesVoiceServiceClass
-    // A Mac on the cable reaches the app through usbmuxd; Wi-Fi stays the fallback.
+    // A Mac on the cable reaches the app through usbmuxd, and one on Bluetooth through the
+    // bridge; Wi-Fi stays the fallback.
     configuration.listensForUSB = true
+    configuration.listensForBluetooth = network.usesBluetooth
 
     clientGeneration += 1
     let generation = clientGeneration
@@ -307,6 +316,32 @@ final class MouseEngine: @unchecked Sendable {
     client?.stop()
     client = nil
     clientStatus = .stopped
+  }
+
+  /// Runs the Bluetooth bridge while the app is active and the setting is on. It outlives the
+  /// clients it relays for: each new client listens on the same loopback port, and the bridge
+  /// reconnects to it.
+  private func updateBluetoothBridge() {
+    let shouldRun = isRunning && network.usesBluetooth
+    if shouldRun && bluetoothBridge == nil {
+      let bridge = BluetoothPeripheralBridge { [weak self] event in
+        guard let self else { return }
+        queue.async { [self] in
+          switch event {
+          case .log(let entry):
+            logOutbox.enqueue(.log(entry))
+          case .stateChanged(let state):
+            bluetoothState = state
+          }
+        }
+      }
+      bluetoothBridge = bridge
+      bridge.start()
+    } else if !shouldRun, let bridge = bluetoothBridge {
+      bridge.stop()
+      bluetoothBridge = nil
+      bluetoothState = .stopped
+    }
   }
 
   /// The pipeline pauses while the app is inactive or the settings sheet is open.
@@ -416,6 +451,9 @@ final class MouseEngine: @unchecked Sendable {
       "arDelayMs": .double(diagnostics.arDelayMs.rounded(places: 1)),
       "imuHz": .double(diagnostics.imuRate.rounded(places: 1)),
       "jitterMm": .double(diagnostics.jitterMm.rounded(places: 2)),
+      "prediction": .string(diagnostics.prediction.rawValue),
+      "predLeadMm": .double(diagnostics.predictionLeadMm.rounded(places: 1)),
+      "predErrMm": .double(diagnostics.predictionErrorMm.rounded(places: 2)),
       "speedMmS": .double(diagnostics.speedMmPerSecond.rounded(places: 0)),
       "gain": .double(diagnostics.gain.rounded(places: 2)),
       "heightCm": .double(diagnostics.heightAboveDeskCm.rounded(places: 1)),
@@ -491,6 +529,7 @@ final class MouseEngine: @unchecked Sendable {
       "target": .string(target),
       "peerToPeer": .bool(network.includesPeerToPeer),
       "voiceClass": .bool(network.usesVoiceServiceClass),
+      "bluetooth": .bool(network.usesBluetooth),
     ]
   }
 
@@ -584,6 +623,7 @@ final class MouseEngine: @unchecked Sendable {
     var snapshot = EngineSnapshot()
     snapshot.clientStatus = clientStatus
     snapshot.linkStats = client?.stats ?? LinkStats()
+    snapshot.bluetoothState = bluetoothState
     snapshot.logStats = logOutbox.stats
     snapshot.diagnostics = pipeline.diagnostics
     snapshot.buttons = pipeline.state.buttons

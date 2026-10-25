@@ -269,6 +269,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/SourisPhone-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Souris;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Souris can send mouse movements to your Mac over Bluetooth when there's no cable.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Souris tracks how the phone moves using the rear camera, so it can move your Mac's pointer. Camera images never leave the phone.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Souris finds your Mac on the local network and sends it mouse movements.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Souris reads the gyroscope to turn tilts and swivels into scrolling and pointer movement.";
@@ -298,6 +299,7 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Config/SourisPhone-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Souris;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Souris can send mouse movements to your Mac over Bluetooth when there's no cable.";
 				INFOPLIST_KEY_NSCameraUsageDescription = "Souris tracks how the phone moves using the rear camera, so it can move your Mac's pointer. Camera images never leave the phone.";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Souris finds your Mac on the local network and sends it mouse movements.";
 				INFOPLIST_KEY_NSMotionUsageDescription = "Souris reads the gyroscope to turn tilts and swivels into scrolling and pointer movement.";
@@ -334,6 +336,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Souris;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Souris can receive mouse movements from your iPhone over Bluetooth.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Souris listens on the local network for your iPhone, which sends it mouse movements.";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -363,6 +366,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Souris;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Souris can receive mouse movements from your iPhone over Bluetooth.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Souris listens on the local network for your iPhone, which sends it mouse movements.";
 				LD_RUNPATH_SEARCH_PATHS = (

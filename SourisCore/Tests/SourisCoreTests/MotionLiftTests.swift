@@ -62,8 +62,8 @@ import simd
     #expect(abs(steps.finalCursor.x - 2.5 * 80) < 1, "cursor \(steps.finalCursor)")
   }
 
-  @Test func aLiftDuringAFastStrokeTakesBackAtMostMaxRollback() {
-    // Slide 10 cm right during the 0.15 s rise: 250 pt at slow gain, far past the 100 pt cap.
+  @Test func aLiftDuringAFastStrokeTakesBackAtMostTheRollbackLimit() {
+    // Slide 10 cm right during the 0.15 s rise: 250 pt at slow gain, far past the 40 pt cap.
     var session = SyntheticSession(duration: 3)
     session.path.position = { time in
       let right = 0.1 * Synthetic.ramp(time, 1, 1.15)
@@ -77,7 +77,7 @@ import simd
       return nil
     }
     #expect(rolledBack.count == 1)
-    let limit = PipelineSettings.Lift().maxRollback
+    let limit = PipelineSettings.Lift().rollbackLimit
     #expect(abs((rolledBack.first ?? 0) - limit) < 1e-6, "rolled back \(rolledBack)")
     // The cursor stays well right of where the rise began.
     #expect(steps.cursor(at: 1.4).x - steps.cursor(at: 0.9).x > 20)

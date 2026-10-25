@@ -8,6 +8,10 @@ import Network
 extension WireProtocol {
   /// The TCP port the phone listens on, on its loopback interface only, for the Mac's USB link.
   public static let usbPort: UInt16 = 47812
+
+  /// The TCP port the phone listens on, on its loopback interface only, for its own Bluetooth
+  /// bridge. Same framing as the USB link.
+  public static let bluetoothPort: UInt16 = 47813
 }
 
 /// The framing on the USB stream: every packet is preceded by its length as a big-endian

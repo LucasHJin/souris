@@ -1,5 +1,7 @@
 import Foundation
 
+import SourisCore
+
 /// The settings that survive a relaunch, stored in `UserDefaults`.
 struct Preferences {
   private let defaults = UserDefaults.standard
@@ -14,6 +16,18 @@ struct Preferences {
   var allowsPeerToPeer: Bool {
     get { defaults.object(forKey: "allowsPeerToPeer") as? Bool ?? false }
     nonmutating set { defaults.set(newValue, forKey: "allowsPeerToPeer") }
+  }
+
+  /// Whether the Mac looks for the iPhone over Bluetooth LE. On by default.
+  var usesBluetooth: Bool {
+    get { defaults.object(forKey: "usesBluetooth") as? Bool ?? true }
+    nonmutating set { defaults.set(newValue, forKey: "usesBluetooth") }
+  }
+
+  /// How the pointer's motion is paced. Smooth by default.
+  var pointerPacing: PointerPacing {
+    get { defaults.string(forKey: "pointerPacing").flatMap(PointerPacing.init) ?? .smooth }
+    nonmutating set { defaults.set(newValue.rawValue, forKey: "pointerPacing") }
   }
 
   /// The IDs of the phones the user allowed to control the pointer.

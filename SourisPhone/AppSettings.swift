@@ -7,6 +7,7 @@ struct NetworkSettings: Equatable, Sendable {
   var target: ClientTarget
   var includesPeerToPeer: Bool
   var usesVoiceServiceClass: Bool
+  var usesBluetooth: Bool
 }
 
 /// Everything the user can change, persisted as JSON in `UserDefaults`.
@@ -28,6 +29,9 @@ struct AppSettings: Codable, Equatable, Sendable {
   var includesPeerToPeer = false
   var usesVoiceServiceClass = true
 
+  /// Carry the link over Bluetooth LE when the Mac connects that way, in preference to Wi-Fi.
+  var usesBluetooth = true
+
   init() {}
 
   /// Decodes field by field, keeping every field that still reads and defaulting the rest, so
@@ -43,6 +47,7 @@ struct AppSettings: Codable, Equatable, Sendable {
     manualAddress = container.value(.manualAddress, default: "")
     includesPeerToPeer = container.value(.includesPeerToPeer, default: false)
     usesVoiceServiceClass = container.value(.usesVoiceServiceClass, default: true)
+    usesBluetooth = container.value(.usesBluetooth, default: true)
   }
 
   /// Where the client connects: the manual address when it parses, otherwise Bonjour.
@@ -57,7 +62,8 @@ struct AppSettings: Codable, Equatable, Sendable {
     NetworkSettings(
       target: target,
       includesPeerToPeer: includesPeerToPeer,
-      usesVoiceServiceClass: usesVoiceServiceClass)
+      usesVoiceServiceClass: usesVoiceServiceClass,
+      usesBluetooth: usesBluetooth)
   }
 }
 

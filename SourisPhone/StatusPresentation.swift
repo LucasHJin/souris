@@ -26,6 +26,14 @@ struct StatusPresentation: Equatable {
 }
 
 extension EngineSnapshot {
+  private func connectedText(_ mac: String) -> String {
+    switch linkStats.transport {
+    case .wifi: "Connected to \(mac)"
+    case .usb: "Connected to \(mac) over USB"
+    case .bluetooth: "Connected to \(mac) over Bluetooth"
+    }
+  }
+
   /// The link to the Mac, ignoring the camera.
   var connectionLine: ConnectionLine {
     switch clientStatus {
@@ -38,9 +46,7 @@ extension EngineSnapshot {
     case .waitingForApproval(let mac):
       ConnectionLine(text: "Allow this iPhone on \(mac)", level: .caution)
     case .connected(let mac):
-      ConnectionLine(
-        text: linkStats.isUSB ? "Connected to \(mac) over USB" : "Connected to \(mac)",
-        level: .good)
+      ConnectionLine(text: connectedText(mac), level: .good)
     case .denied(let mac):
       ConnectionLine(text: "\(mac) refused this iPhone", level: .problem)
     case .busy(let mac):

@@ -166,6 +166,12 @@ extension PipelineEvent {
       return (.info, "paused", ["paused": .bool(isPaused)])
     case .recentered:
       return (.info, "recentered", [:])
+    case .predictionChecked(let sign, let correlation):
+      var fields: [String: LogValue] = ["correlation": .double(correlation.rounded(places: 3))]
+      if let sign {
+        fields["sign"] = .double(sign)
+      }
+      return (sign == nil ? .warning : .info, "predictionChecked", fields)
     }
   }
 }

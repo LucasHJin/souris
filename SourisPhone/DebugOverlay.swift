@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+import SourisCore
+
 /// A compact monospaced block of live readouts for tuning.
 struct DebugOverlay: View {
   let snapshot: EngineSnapshot
@@ -31,6 +33,9 @@ enum DebugReadout {
         + " \(number(diagnostics.arDelayMs, 6, 1)) ms",
       "IMU \(number(diagnostics.imuRate, 5, 1)) Hz \(number(diagnostics.imuDelayMs, 6, 1)) ms"
         + "  clock \(diagnostics.clockMismatch ? "MISMATCH" : "ok")",
+      "pred \(pad(diagnostics.prediction.rawValue, to: 8))"
+        + " lead \(number(diagnostics.predictionLeadMm, 5, 1)) mm"
+        + "  err \(number(diagnostics.predictionErrorMm, 5, 2)) mm",
       "jitter \(number(diagnostics.jitterMm, 5, 2)) mm"
         + "  speed \(number(diagnostics.speedMmPerSecond, 6, 0)) mm/s"
         + "  gain \(number(diagnostics.gain, 4, 2))",
@@ -42,7 +47,7 @@ enum DebugReadout {
       "RTT \(optionalNumber(link.rttMedianMs, 5, 1))/\(optionalNumber(link.rttMaxMs, 6, 1)) ms"
         + "  \(number(link.packetsPerSecond, 4, 0))/s"
         + "  loss \(number(link.pingLoss * 100, 3, 0))%"
-        + (link.isUSB ? "  USB" : "  Wi-Fi"),
+        + "  \(transportName(link.transport))",
       "cursor \(pad(diagnostics.cursorGate.rawValue, to: 18))"
         + " presses \(String(format: "%4ld", diagnostics.scrollPresses))",
       "thermal \(thermal)  jumps \(String(format: "%4ld", diagnostics.rejectedJumps))"
@@ -66,6 +71,14 @@ enum DebugReadout {
   private static func pad(_ text: String, to width: Int, leading: Bool = false) -> String {
     let padding = String(repeating: " ", count: max(0, width - text.count))
     return leading ? padding + text : text + padding
+  }
+
+  private static func transportName(_ transport: LinkTransport) -> String {
+    switch transport {
+    case .wifi: "Wi-Fi"
+    case .usb: "USB"
+    case .bluetooth: "BT"
+    }
   }
 
   private static func yesNo(_ value: Bool) -> String {

@@ -1,5 +1,7 @@
 import SwiftUI
 
+import SourisCore
+
 /// The menu bar menu. Plain native items only.
 struct MenuContent: View {
   let model: MacModel
@@ -11,6 +13,9 @@ struct MenuContent: View {
     }
     if let usb = model.usbDetail {
       Text(verbatim: usb)
+    }
+    if let bluetooth = model.bluetoothDetail {
+      Text(verbatim: bluetooth)
     }
 
     if model.pendingApproval != nil || !model.isAccessibilityGranted {
@@ -44,6 +49,21 @@ struct MenuContent: View {
     }
 
     Menu("Advanced") {
+      Picker(
+        "Pointer Pacing",
+        selection: Binding(
+          get: { model.pointerPacing },
+          set: { model.setPointerPacing($0) })
+      ) {
+        Text("Smooth").tag(PointerPacing.smooth)
+        Text("Responsive").tag(PointerPacing.responsive)
+        Text("Immediate").tag(PointerPacing.immediate)
+      }
+      Toggle(
+        "Use Bluetooth",
+        isOn: Binding(
+          get: { model.usesBluetooth },
+          set: { model.setUsesBluetooth($0) }))
       Toggle(
         "Allow Peer-to-Peer Wi-Fi",
         isOn: Binding(
