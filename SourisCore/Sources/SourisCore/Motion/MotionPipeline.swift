@@ -187,6 +187,9 @@ public struct MotionPipeline: Sendable {
   private var breakoutPoint = SmoothedPoint()
   private var jitter = JitterMeter()
 
+  /// The previous sample's `tiltRise`, for the click freeze's breakout.
+  private var lastTiltRise: Double?
+
   // Gates and gestures.
   private var isPaused = false
   private var scrollTilt = ScrollTilt()
@@ -221,6 +224,14 @@ public struct MotionPipeline: Sendable {
   /// frame.
   private var leverInCamera: SIMD3<Double> {
     Frames.topEdgeInCamera * settings.pointer.sensorReach
+  }
+
+  /// With tilt pointing, the height of the point `tiltReach` ahead of the camera along the top
+  /// edge above the camera, millimetres; it counts as forward travel. Zero without it.
+  private var tiltRise: Double {
+    guard settings.pointer.tiltPointing, !settings.tiltScroll.isEnabled else { return 0 }
+    let tip = currentOrientation.act(Frames.topEdgeInCamera * settings.pointer.tiltReach)
+    return tip.y * 1000
   }
 
   /// Feeds one ARKit frame.
@@ -617,7 +628,11 @@ public struct MotionPipeline: Sendable {
     let worldPoint = SIMD2(point.x, point.z) * 1000
     jitter.record(worldPoint, time: time)
     diagnostics.jitterMm = jitter.rms
-    let smoothedStep = breakoutPoint.update(worldPoint, time: time)
+    // A tilt counts as a push along the heading, for the breakout as for the cursor.
+    let rise = tiltRise
+    let tiltStep = SIMD2(forward.x, forward.z) * (rise - (lastTiltRise ?? rise))
+    lastTiltRise = rise
+    let smoothedStep = breakoutPoint.update(worldPoint, time: time) + tiltStep
 
     var isFrozen = clickFreeze.isFrozen(at: sampleTime)
     if isFrozen && clickFreeze.accumulate(smoothedStep, breakout: settings.click.freezeBreakout) {
@@ -627,7 +642,7 @@ public struct MotionPipeline: Sendable {
 
     let gate = refreshGate(at: time)
     guard isEngaged else { return }
-    let position = SIMD2(simd_dot(point, right), simd_dot(point, forward)) * 1000
+    let position = SIMD2(simd_dot(point, right), simd_dot(point, forward)) * 1000 + SIMD2(0, rise)
     let pointer = settings.pointer
     let filtered = filter.update(
       position,
@@ -654,7 +669,7 @@ public struct MotionPipeline: Sendable {
       let smoothed = breakoutPoint.value ?? worldPoint
       let restart = SIMD2(
         simd_dot(smoothed, SIMD2(right.x, right.z)),
-        simd_dot(smoothed, SIMD2(forward.x, forward.z)))
+        simd_dot(smoothed, SIMD2(forward.x, forward.z)) + rise)
       filter.reset(to: restart, time: time)
       gainSpeed.reset(to: restart, time: time)
       lastFiltered = restart

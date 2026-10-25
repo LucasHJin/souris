@@ -44,7 +44,36 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     /// working through brief tracking dropouts.
     public var gyroAssist = true
 
+    /// Tilting the front edge up moves the cursor up, and down moves it down, on top of the
+    /// forward and back slides. Off while tilt-to-scroll is on, which uses the same motion.
+    public var tiltPointing = true
+
+    /// How far a tilt moves the cursor: the distance ahead of the camera, along the long axis,
+    /// of a point whose rise counts as a push forward, metres. At 10 cm, 1° of tilt is a 1.7 mm
+    /// push. In the 2026-10-25 session the wrist's pitch wobbled up to about 5° in 0.2 s
+    /// windows, about 8 mm of push at this reach, so a shorter one steadies the vertical.
+    public var tiltReach: Double = 0.1
+
     public init() {}
+
+    public init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let defaults = Pointer()
+      slowGain = try container.decode(.slowGain, default: defaults.slowGain)
+      accelerationRatio = try container.decode(
+        .accelerationRatio, default: defaults.accelerationRatio)
+      slowSpeed = try container.decode(.slowSpeed, default: defaults.slowSpeed)
+      fastSpeed = try container.decode(.fastSpeed, default: defaults.fastSpeed)
+      speedScale = try container.decode(.speedScale, default: defaults.speedScale)
+      filterMinCutoff = try container.decode(.filterMinCutoff, default: defaults.filterMinCutoff)
+      filterBeta = try container.decode(.filterBeta, default: defaults.filterBeta)
+      filterDerivativeCutoff = try container.decode(
+        .filterDerivativeCutoff, default: defaults.filterDerivativeCutoff)
+      sensorReach = try container.decode(.sensorReach, default: defaults.sensorReach)
+      gyroAssist = try container.decode(.gyroAssist, default: defaults.gyroAssist)
+      tiltPointing = try container.decode(.tiltPointing, default: defaults.tiltPointing)
+      tiltReach = try container.decode(.tiltReach, default: defaults.tiltReach)
+    }
   }
 
   /// Tilt-to-scroll.

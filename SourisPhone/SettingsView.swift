@@ -72,6 +72,18 @@ struct SettingsView: View {
         step: 0.005,
         displayFactor: 100,
         unit: " cm")
+      Toggle("Tilt moves up and down", isOn: $model.settings.pipeline.pointer.tiltPointing)
+        .disabled(model.settings.pipeline.tiltScroll.isEnabled)
+      SliderRow(
+        title: "Tilt reach",
+        value: $model.settings.pipeline.pointer.tiltReach,
+        range: 0.01...0.25,
+        step: 0.005,
+        displayFactor: 100,
+        unit: " cm")
+        .disabled(
+          !model.settings.pipeline.pointer.tiltPointing
+            || model.settings.pipeline.tiltScroll.isEnabled)
       Toggle("Gyro assist", isOn: $model.settings.pipeline.pointer.gyroAssist)
       Toggle("Motion prediction", isOn: $model.settings.pipeline.prediction.isEnabled)
     } header: {
@@ -80,8 +92,10 @@ struct SettingsView: View {
       Text(
         "A lower Smoothing cutoff steadies the pointer at rest but adds lag. Higher "
           + "Responsiveness cuts that lag when moving fast. Swivel reach is how far ahead of the "
-          + "camera the sensing point sits. Motion prediction uses the accelerometer to move the "
-          + "pointer to where the phone is now, not where the camera saw it about 40 ms ago; it "
+          + "camera the sensing point sits. With tilt on, tipping the front edge up moves the "
+          + "pointer up as a push forward would; a shorter Tilt reach makes it gentler. Tilt to "
+          + "scroll turns it off. Motion prediction uses the accelerometer to move the pointer "
+          + "to where the phone is now, not where the camera saw it about 40 ms ago; it "
           + "switches itself on after a second or so of moving.")
     }
   }
@@ -125,7 +139,7 @@ struct SettingsView: View {
       Text(
         "Volume up scrolls up one step; hold a button to keep scrolling faster. While Souris is "
           + "open the phone’s volume stays at 50%. Tilt to scroll freezes the pointer while it "
-          + "scrolls.")
+          + "scrolls, and takes over tilting from the pointer.")
     }
   }
 
