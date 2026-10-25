@@ -1,5 +1,7 @@
 import SwiftUI
 
+import SourisCore
+
 /// The menu bar menu. Plain native items only.
 struct MenuContent: View {
   let model: MacModel
@@ -44,6 +46,16 @@ struct MenuContent: View {
     }
 
     Menu("Advanced") {
+      Picker(
+        "Pointer Pacing",
+        selection: Binding(
+          get: { model.pointerPacing },
+          set: { model.setPointerPacing($0) })
+      ) {
+        Text("Smooth").tag(PointerPacing.smooth)
+        Text("Responsive").tag(PointerPacing.responsive)
+        Text("Immediate").tag(PointerPacing.immediate)
+      }
       Toggle(
         "Allow Peer-to-Peer Wi-Fi",
         isOn: Binding(

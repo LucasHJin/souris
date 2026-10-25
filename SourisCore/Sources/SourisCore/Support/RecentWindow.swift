@@ -42,3 +42,5 @@ struct RecentWindow<Element>: RandomAccessCollection, MutableCollection {
     return (oldest + position) % storage.count
   }
 }
+
+extension RecentWindow: Sendable where Element: Sendable {}

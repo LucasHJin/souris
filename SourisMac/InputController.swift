@@ -64,8 +64,22 @@ final class InputController: @unchecked Sendable {
   private var windowStats = PacketStats()
   private var windowCounters = PostCounters()
 
-  init(clickInterval: TimeInterval, displayLayout: DisplayLayout, log: MacLog) {
+  /// Paces cursor motion onto the display's refreshes (see `MotionPlayout`).
+  private var playout: MotionPlayout
+
+  /// Cumulative cursor motion received from the phone and posted, points. Their difference is
+  /// what the playout still holds.
+  private var receivedTotal = SIMD2<Double>.zero
+  private var postedTotal = SIMD2<Double>.zero
+
+  init(
+    clickInterval: TimeInterval,
+    displayLayout: DisplayLayout,
+    pacing: PointerPacing,
+    log: MacLog
+  ) {
     poster = EventPoster(clickInterval: clickInterval, displayLayout: displayLayout)
+    playout = MotionPlayout(pacing: pacing)
     self.log = log
   }
 
@@ -92,7 +106,7 @@ final class InputController: @unchecked Sendable {
         if !update.buttonChanges.isEmpty {
           logButtons(update.buttonChanges)
         }
-        poster.post(update)
+        post(update, phoneTime: Double(packet.phoneTimeMicros) / 1_000_000)
       }
       countPacket()
 
@@ -125,6 +139,24 @@ final class InputController: @unchecked Sendable {
     }
   }
 
+  /// Shows one display refresh's worth of cursor motion. Call from the display link; it hops
+  /// onto the queue.
+  func displayFrame() {
+    queue.async { [self] in
+      guard playout.pacing != .immediate else { return }
+      moveCursor(to: playout.frame(at: ProcessInfo.processInfo.systemUptime))
+    }
+  }
+
+  /// Changes how motion is paced. Whatever the playout still holds is posted first.
+  func setPacing(_ pacing: PointerPacing) {
+    queue.async { [self] in
+      guard pacing != playout.pacing else { return }
+      moveCursor(to: playout.flush())
+      playout.pacing = pacing
+    }
+  }
+
   /// Releases every held button and ends any scroll, without waiting.
   func reset() {
     queue.async { self.endSession() }
@@ -148,6 +180,41 @@ final class InputController: @unchecked Sendable {
     }
     poster.post(releases)
     poster.reset()
+    playout.reset()
+    receivedTotal = .zero
+    postedTotal = .zero
+  }
+
+  /// Posts an update: buttons and scrolling at once, and the motion either at once or through
+  /// the playout.
+  private func post(_ update: InputUpdate, phoneTime: TimeInterval) {
+    guard playout.pacing != .immediate else {
+      poster.post(update)
+      return
+    }
+    receivedTotal += update.cursorDelta
+    playout.add(
+      total: receivedTotal, phoneTime: phoneTime, arrival: ProcessInfo.processInfo.systemUptime)
+    if !update.buttonChanges.isEmpty {
+      // A press or release lands where the phone says the cursor is, so the held motion goes
+      // first. The click freeze keeps the hand still around taps, so this is rarely more than a
+      // few points.
+      moveCursor(to: playout.flush())
+    }
+    if !update.buttonChanges.isEmpty || !update.scrollEvents.isEmpty {
+      poster.post(
+        InputUpdate(buttonChanges: update.buttonChanges, scrollEvents: update.scrollEvents))
+    }
+  }
+
+  /// Posts the motion from what has been posted so far to `total`.
+  private func moveCursor(to total: SIMD2<Double>?) {
+    guard let total else { return }
+    let delta = total - postedTotal
+    postedTotal = total
+    if delta != .zero {
+      poster.post(InputUpdate(cursorDelta: delta))
+    }
   }
 
   /// Ends the current phone's session: releases everything and starts counting from zero.
@@ -245,6 +312,18 @@ final class InputController: @unchecked Sendable {
     let resyncs = counters.resyncs - windowCounters.resyncs
     if resyncs > 0 {
       fields["resyncs"] = .int(resyncs)
+    }
+    fields["pacing"] = .string(playout.pacing.rawValue)
+    if playout.pacing != .immediate {
+      let paced = playout.takeStats()
+      fields["paceDelayMs"] = .double((playout.targetDelay * 10_000).rounded() / 10)
+      fields["paceMaxBehindMs"] = .double((paced.maxBehind * 10_000).rounded() / 10)
+      if paced.catchUpFrames > 0 {
+        fields["catchUpFrames"] = .int(paced.catchUpFrames)
+      }
+      if paced.skipped > 0 {
+        fields["skippedMs"] = .double((paced.skipped * 10_000).rounded() / 10)
+      }
     }
     let level: LogLevel = receive.maxGap > 0.15 || resyncs > 0 ? .warning : .debug
     log.log(level, "input", "input", nil, fields)

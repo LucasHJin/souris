@@ -32,6 +32,7 @@ final class MacModel {
   private(set) var approvedDeviceIDs: Set<UUID>
   private(set) var acceptsConnections: Bool
   private(set) var allowsPeerToPeer: Bool
+  private(set) var pointerPacing: PointerPacing
   private(set) var usbState = USBBridgeState.stopped
 
   /// The controlling phone's packets are coming over the USB cable.
@@ -47,6 +48,7 @@ final class MacModel {
   @ObservationIgnored private let macName: String
   @ObservationIgnored private let displayLayout: DisplayLayout
   @ObservationIgnored private let inputController: InputController
+  @ObservationIgnored private let frameClock: FrameClock
   @ObservationIgnored private var server: SourisServer?
   @ObservationIgnored private var usbBridge: USBBridge?
 
@@ -65,11 +67,15 @@ final class MacModel {
     self.log = log
     self.displayLayout = displayLayout
     macName = SystemInfo.computerName()
-    inputController = InputController(
-      clickInterval: NSEvent.doubleClickInterval, displayLayout: displayLayout, log: log)
+    let inputController = InputController(
+      clickInterval: NSEvent.doubleClickInterval, displayLayout: displayLayout,
+      pacing: preferences.pointerPacing, log: log)
+    self.inputController = inputController
+    frameClock = FrameClock { inputController.displayFrame() }
     approvedDeviceIDs = preferences.approvedDeviceIDs
     acceptsConnections = preferences.acceptsConnections
     allowsPeerToPeer = preferences.allowsPeerToPeer
+    pointerPacing = preferences.pointerPacing
   }
 
   // MARK: - Derived menu content
@@ -184,6 +190,15 @@ final class MacModel {
     }
   }
 
+  func setPointerPacing(_ pacing: PointerPacing) {
+    guard pacing != pointerPacing else { return }
+    log.log(.info, "menu", "pointerPacing", nil, ["pacing": .string(pacing.rawValue)])
+    pointerPacing = pacing
+    preferences.pointerPacing = pacing
+    inputController.setPacing(pacing)
+    updateFrameClock()
+  }
+
   func disconnectController() {
     log.log(.info, "menu", "disconnect", "Disconnect iPhone chosen")
     server?.disconnectController()
@@ -266,6 +281,16 @@ final class MacModel {
     packetsPerSecond = 0
     lossFraction = 0
     dismissApprovals()
+    updateFrameClock()
+  }
+
+  /// The display link runs only while a phone is moving the pointer through the playout.
+  private func updateFrameClock() {
+    if isConnected && pointerPacing != .immediate {
+      frameClock.start()
+    } else {
+      frameClock.stop()
+    }
   }
 
   private func handle(_ report: InputReport, generation reportGeneration: Int) {
@@ -303,6 +328,7 @@ final class MacModel {
     case .controllerResumed:
       isControllerSilent = false
     }
+    updateFrameClock()
   }
 
   // MARK: - USB
@@ -367,8 +393,11 @@ final class MacModel {
     let center = NotificationCenter.default
     let screens = center.addObserver(
       forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
-    ) { [displayLayout] _ in
+    ) { [displayLayout, weak self] _ in
       displayLayout.refresh()
+      MainActor.assumeIsolated {
+        self?.frameClock.restart()
+      }
     }
     let terminating = center.addObserver(
       forName: NSApplication.willTerminateNotification, object: nil, queue: .main
@@ -412,6 +441,7 @@ final class MacModel {
         "accessibility": .bool(isAccessibilityGranted),
         "acceptsConnections": .bool(acceptsConnections),
         "peerToPeer": .bool(allowsPeerToPeer),
+        "pointerPacing": .string(pointerPacing.rawValue),
         "approvedDevices": .int(approvedDeviceIDs.count),
         "doubleClickInterval": .double(NSEvent.doubleClickInterval),
       ])
