@@ -173,6 +173,8 @@ private final class TestClient: Sendable {
     configuration.target = .host("127.0.0.1", port: port)
     configuration.pingInterval = .milliseconds(40)
     configuration.helloInterval = .milliseconds(250)
+    // Loopback has no Wi-Fi queue to protect, and the log tests push a lot of records.
+    configuration.logBytesPerSecond = nil
     configure(&configuration)
     self.deviceID = deviceID
     let statuses = statuses

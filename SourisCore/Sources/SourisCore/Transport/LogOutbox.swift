@@ -5,8 +5,10 @@ import Foundation
 /// - Every record gets the next id, counting from 1. Records stay queued, across disconnects and
 ///   across `SourisClient` instances, until a `logAck` covers them.
 /// - Sending is go-back-N: packets go out from a send cursor while at most `windowRecords` records
-///   and `windowBytes` bytes are unacknowledged. When records are in flight and no ack has made
-///   progress for `retransmitTimeout`, the cursor goes back to the oldest unacknowledged record.
+///   and `windowBytes` (8 KB) bytes are unacknowledged. When records are in flight and no ack has
+///   made progress for `retransmitTimeout`, the cursor goes back to the oldest unacknowledged
+///   record. The timeout is the longer of 1 s and 3 × `roundTrip`, and doubles (up to 8 s) with
+///   each timeout in a row, so a slow link isn't flooded with resends of the same records.
 /// - Packets are packed to about `datagramTarget` bytes. A larger record goes alone. A record over
 ///   `maxRecordBytes` (9000) encoded is cut down if it's a log entry (message first, then
 ///   fields), and rejected otherwise.
@@ -37,6 +39,9 @@ public final class LogOutbox: @unchecked Sendable {
     /// Packets that resent records already sent once.
     public var retransmits = 0
 
+    /// How long the outbox currently waits for an ack before resending.
+    public var retransmitTimeout = Duration.zero
+
     public init() {}
   }
 
@@ -52,8 +57,16 @@ public final class LogOutbox: @unchecked Sendable {
   static let datagramTarget = 1200
 
   static let windowRecords = 256
-  static let windowBytes = 256 * 1024
-  static let retransmitTimeout = Duration.milliseconds(300)
+
+  /// Unacknowledged bytes allowed at once. A big window on a stalling link let resends of the
+  /// whole backlog pile up in front of the state packets.
+  static let windowBytes = 8 * 1024
+
+  static let minimumRetransmitTimeout = Duration.seconds(1)
+  static let maximumRetransmitTimeout = Duration.seconds(8)
+
+  /// The retransmit timeout is at least this many round trips.
+  static let roundTripsPerTimeout = 3
 
   /// Identifies this outbox's id sequence to the Mac. Random per app launch by default.
   public let streamID: UInt32
@@ -82,6 +95,9 @@ public final class LogOutbox: @unchecked Sendable {
   /// When an ack last made progress, or when the in-flight window last became non-empty.
   private var lastProgressAt: ContinuousClock.Instant?
 
+  /// Doubles with each timeout that passes without an ack making progress.
+  private var backoff = 1
+
   private var dropped = 0
   private var rejected = 0
   private var packetsSent = 0
@@ -103,6 +119,17 @@ public final class LogOutbox: @unchecked Sendable {
     self.onEnqueue = onEnqueue
   }
 
+  /// The link's round-trip time, which the client keeps up to date from its pings. `nil` until
+  /// one is known.
+  public var roundTrip: Duration?
+
+  /// How long to wait for an ack before resending: the longer of 1 s and 3 round trips, doubled
+  /// for each timeout in a row, at most 8 s.
+  var retransmitTimeout: Duration {
+    let base = max(Self.minimumRetransmitTimeout, (roundTrip ?? .zero) * Self.roundTripsPerTimeout)
+    return min(Self.maximumRetransmitTimeout, base * backoff)
+  }
+
   public var stats: Stats {
     var stats = Stats()
     stats.queuedRecords = queuedCount
@@ -112,6 +139,7 @@ public final class LogOutbox: @unchecked Sendable {
     stats.rejected = rejected
     stats.packetsSent = packetsSent
     stats.retransmits = retransmits
+    stats.retransmitTimeout = retransmitTimeout
     return stats
   }
 
@@ -162,9 +190,12 @@ public final class LogOutbox: @unchecked Sendable {
   /// The next datagram to send, or `nil` when everything queued is in flight or the window is
   /// full.
   func nextDatagram(now: ContinuousClock.Instant) -> Data? {
-    if sendCursor > oldestID, let lastProgressAt, now - lastProgressAt >= Self.retransmitTimeout {
+    if sendCursor > oldestID, let lastProgressAt, now - lastProgressAt >= retransmitTimeout {
       sendCursor = oldestID
       self.lastProgressAt = now
+      if retransmitTimeout < Self.maximumRetransmitTimeout {
+        backoff *= 2
+      }
     }
     guard sendCursor < nextID else { return nil }
 
@@ -212,6 +243,7 @@ public final class LogOutbox: @unchecked Sendable {
       removeOldest()
     }
     lastProgressAt = now
+    backoff = 1
   }
 
   /// Resends from the oldest unacknowledged record on the next `nextDatagram(now:)`, for a new
@@ -219,6 +251,7 @@ public final class LogOutbox: @unchecked Sendable {
   func rewind() {
     sendCursor = oldestID
     lastProgressAt = nil
+    backoff = 1
   }
 
   // MARK: - Storage

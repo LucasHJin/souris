@@ -135,14 +135,25 @@ struct LogOutboxTests {
     #expect(more.reduce(0) { $0 + $1.records.count } == 100)
   }
 
-  @Test func windowStopsAt256KilobytesInFlight() throws {
+  @Test func windowStopsAt8KilobytesInFlight() throws {
     let outbox = LogOutbox(streamID: 1)
     for index in 0..<40 {
-      outbox.enqueue(line(index, bytes: LogOutbox.maxRecordBytes))
+      outbox.enqueue(line(index, bytes: 1000))
     }
     let packets = try drain(outbox, at: at(0))
-    // The window closes once 256 KiB is in flight: 29 records are 261 000 bytes, the 30th passes.
-    #expect(packets.count == 30)
+    // One 1000-byte record per packet. The window closes once 8 KiB is in flight: 8 records are
+    // 8000 bytes, the 9th passes.
+    #expect(packets.count == 9)
+  }
+
+  @Test func aRecordLargerThanTheWindowStillGoesAlone() throws {
+    let outbox = LogOutbox(streamID: 1)
+    outbox.enqueue(line(0, bytes: LogOutbox.maxRecordBytes))
+    outbox.enqueue(line(1))
+    let packets = try drain(outbox, at: at(0))
+    #expect(packets.map(\.firstID) == [1])
+    outbox.acknowledge(stream: 1, through: 1, now: at(5))
+    #expect(try decode(outbox.nextDatagram(now: at(5))).firstID == 2)
   }
 
   @Test func ackFreesRecordsAndStaleOrForeignAcksAreIgnored() throws {
@@ -167,7 +178,7 @@ struct LogOutboxTests {
     #expect(outbox.nextDatagram(now: at(1000)) == nil)
   }
 
-  @Test func noAckProgressFor300msGoesBackToTheOldestUnacked() throws {
+  @Test func noAckProgressFor1sGoesBackToTheOldestUnackedAndBacksOff() throws {
     let outbox = LogOutbox(streamID: 1)
     for index in 0..<30 {
       outbox.enqueue(line(index))
@@ -176,16 +187,44 @@ struct LogOutboxTests {
     #expect(first.count == 3)
     outbox.acknowledge(stream: 1, through: 11, now: at(100))
 
-    #expect(outbox.nextDatagram(now: at(399)) == nil)
-    let resent = try decode(outbox.nextDatagram(now: at(400)))
+    #expect(outbox.nextDatagram(now: at(1099)) == nil)
+    let resent = try decode(outbox.nextDatagram(now: at(1100)))
     #expect(resent.firstID == 12)
     #expect(resent.oldestID == 12)
     #expect(outbox.stats.retransmits == 1)
 
-    // The timer restarts at the rewind.
-    _ = try drain(outbox, at: at(400))
-    #expect(outbox.nextDatagram(now: at(699)) == nil)
-    #expect(try decode(outbox.nextDatagram(now: at(700))).firstID == 12)
+    // The timer restarts at the rewind, twice as long.
+    _ = try drain(outbox, at: at(1100))
+    #expect(outbox.stats.retransmitTimeout == .seconds(2))
+    #expect(outbox.nextDatagram(now: at(3099)) == nil)
+    #expect(try decode(outbox.nextDatagram(now: at(3100))).firstID == 12)
+
+    // It doubles up to 8 s.
+    _ = try drain(outbox, at: at(3100))
+    #expect(try decode(outbox.nextDatagram(now: at(7100))).firstID == 12)
+    _ = try drain(outbox, at: at(7100))
+    #expect(outbox.stats.retransmitTimeout == .seconds(8))
+    #expect(outbox.nextDatagram(now: at(15099)) == nil)
+    #expect(try decode(outbox.nextDatagram(now: at(15100))).firstID == 12)
+    #expect(outbox.stats.retransmitTimeout == .seconds(8))
+
+    // Progress resets it.
+    outbox.acknowledge(stream: 1, through: 20, now: at(15200))
+    #expect(outbox.stats.retransmitTimeout == .seconds(1))
+  }
+
+  @Test func theRetransmitTimeoutIsAtLeastThreeRoundTrips() throws {
+    let outbox = LogOutbox(streamID: 1)
+    outbox.roundTrip = .milliseconds(600)
+    #expect(outbox.stats.retransmitTimeout == .milliseconds(1800))
+    outbox.enqueue(line(0))
+    _ = try drain(outbox, at: at(0))
+    #expect(outbox.nextDatagram(now: at(1799)) == nil)
+    #expect(try decode(outbox.nextDatagram(now: at(1800))).firstID == 1)
+
+    outbox.roundTrip = .milliseconds(100)
+    outbox.rewind()
+    #expect(outbox.stats.retransmitTimeout == .seconds(1))
   }
 
   @Test func ackPastTheCursorAfterARewindSkipsAhead() throws {
@@ -194,9 +233,26 @@ struct LogOutboxTests {
       outbox.enqueue(line(index))
     }
     _ = try drain(outbox, at: at(0))
-    #expect(try decode(outbox.nextDatagram(now: at(300))).firstID == 1)
-    outbox.acknowledge(stream: 1, through: 22, now: at(310))
-    #expect(try decode(outbox.nextDatagram(now: at(310))).firstID == 23)
+    #expect(try decode(outbox.nextDatagram(now: at(1000))).firstID == 1)
+    outbox.acknowledge(stream: 1, through: 22, now: at(1010))
+    #expect(try decode(outbox.nextDatagram(now: at(1010))).firstID == 23)
+  }
+
+  // MARK: - Rate limit
+
+  @Test func rateLimiterLetsOneSendThroughAtATimeAndPaysBackLargeOnes() {
+    var limiter = ByteRateLimiter(bytesPerSecond: 20_000, burst: 2400)
+    #expect(limiter.canSend(now: at(0)))
+    limiter.charge(9000)
+    // 6600 bytes in debt: paid back after 330 ms.
+    #expect(!limiter.canSend(now: at(300)))
+    #expect(limiter.canSend(now: at(331)))
+    limiter.charge(1200)
+    #expect(!limiter.canSend(now: at(380)))
+    // Credit stops at the burst however long the wait.
+    #expect(limiter.canSend(now: at(10_000)))
+    limiter.charge(2400)
+    #expect(!limiter.canSend(now: at(10_000)))
   }
 
   @Test func rewindResendsAtOnce() throws {

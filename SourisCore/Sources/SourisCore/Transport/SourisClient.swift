@@ -73,10 +73,11 @@ public struct LinkStats: Equatable, Sendable {
 /// - If nothing comes back for 3 s (`notRespondingTimeout`) the status becomes `.notResponding`;
 ///   after 6 s (`reconnectTimeout`) the client reconnects, re-browsing when the target is Bonjour.
 /// - With a `LogOutbox`, the client logs its network events into it (category `"net"`) and, while
-///   the latest welcome is `accepted` or `busy` and the Mac is responding, sends up to
-///   `logDatagramsPerTick` log packets per tick, after the state packet. Log packets carry the
-///   best-effort service class per message, so they stay out of the Wi-Fi voice queue the state
-///   packets use. Without an outbox nothing is logged or sent.
+///   the latest welcome is `accepted` or `busy` and the Mac is responding, sends log packets one at
+///   a time: a log packet goes only when no state packet is waiting or in flight, the previous log
+///   packet has completed, and `logBytesPerSecond` allows it. Log packets carry the best-effort
+///   service class per message, so they stay out of the Wi-Fi voice queue the state packets use.
+///   Without an outbox nothing is logged or sent.
 ///
 /// Thread safety: every method may be called from any thread. `onStatus` and `onBrowseResults`
 /// are called on `queue`. The log outbox must be confined to `queue` as well.
@@ -107,6 +108,11 @@ public final class SourisClient: @unchecked Sendable {
     /// `notRespondingTimeout`.
     public var reconnectTimeout: Duration = .seconds(6)
 
+    /// The average rate log packets may use, bytes per second. `nil` sends them as fast as the
+    /// state packets leave room for. Wi-Fi stalls queue everything sent into them, so the log
+    /// stream is kept small next to the state packets.
+    public var logBytesPerSecond: Double? = 20_000
+
     public init(deviceID: UUID, deviceName: String) {
       self.deviceID = deviceID
       self.deviceName = deviceName
@@ -130,7 +136,8 @@ public final class SourisClient: @unchecked Sendable {
   private static let sendStallTimeout = Duration.seconds(1)
   private static let rateSampleInterval = Duration.milliseconds(500)
   private static let byeGracePeriod = DispatchTimeInterval.milliseconds(100)
-  private static let logDatagramsPerTick = 2
+  /// Credit the log rate limit can bank, bytes: about two full log packets.
+  private static let logBurstBytes = 2.0 * Double(LogOutbox.datagramTarget)
   private static let logCategory = "net"
   private static let slowRoundTripMs = 150.0
   private static let linkSummaryInterval = Duration.seconds(1)
@@ -182,6 +189,9 @@ public final class SourisClient: @unchecked Sendable {
   private var rateSampleStart = ContinuousClock.now
 
   private var logLimiter = LogRateLimiter()
+  private var logBudget: ByteRateLimiter?
+  private var isLogSendInFlight = false
+  private var lastLogSentAt = ContinuousClock.now
   private var summary = LinkSummary()
   private var nextSummaryAt = ContinuousClock.now
 
@@ -216,6 +226,9 @@ public final class SourisClient: @unchecked Sendable {
     let ip = NWProtocolIP.Metadata()
     ip.serviceClass = .bestEffort
     logContext = NWConnection.ContentContext(identifier: "log", metadata: [ip])
+    logBudget = configuration.logBytesPerSecond.map {
+      ByteRateLimiter(bytesPerSecond: $0, burst: Self.logBurstBytes)
+    }
   }
 
   deinit {
@@ -452,6 +465,7 @@ public final class SourisClient: @unchecked Sendable {
     welcome = nil
     isNotResponding = false
     isSendInFlight = false
+    isLogSendInFlight = false
     lastHeard = .now
     monitor = LinkMonitor()
     publishStats()
@@ -528,6 +542,7 @@ public final class SourisClient: @unchecked Sendable {
     welcome = nil
     isNotResponding = false
     isSendInFlight = false
+    isLogSendInFlight = false
     return old
   }
 
@@ -631,6 +646,7 @@ public final class SourisClient: @unchecked Sendable {
     let roundTripMs = monitor.recordPong(
       id: pong.id, echoedMicros: pong.phoneTimeMicros, arrivalMicros: Uptime.micros())
     publishStats()
+    logOutbox?.roundTrip = stats.rttMedianMs.map { .milliseconds($0) }
     guard let roundTripMs else { return }
     summary.pongs += 1
     summary.roundTripsMs.append(roundTripMs)
@@ -714,6 +730,10 @@ public final class SourisClient: @unchecked Sendable {
     }
     isSendInFlight = false
     pumpState()
+    // The gap behind a state packet is the log stream's chance to go.
+    if isConnectionReady && welcome?.status == .accepted {
+      sendLogs(.now)
+    }
   }
 
   private func sendFailed(_ error: NWError, kind: String, token: Int) {
@@ -724,12 +744,38 @@ public final class SourisClient: @unchecked Sendable {
     logLimited(.warning, "sendError", fields: fields)
   }
 
-  /// Sends up to `logDatagramsPerTick` log packets from the outbox.
+  /// A state packet is waiting to go or still being sent. Log packets wait for it, so they never
+  /// queue in front of one.
+  private var isStatePending: Bool {
+    welcome?.status == .accepted && (isSendInFlight || (hasUnsentState && latestState != nil))
+  }
+
+  /// Sends the next log packet from the outbox, if nothing else is in the way.
   private func sendLogs(_ now: ContinuousClock.Instant) {
-    guard let logOutbox, !isNotResponding else { return }
-    for _ in 0..<Self.logDatagramsPerTick {
-      guard let datagram = logOutbox.nextDatagram(now: now) else { return }
-      sendTracked(datagram, kind: "log", context: logContext)
+    guard let logOutbox, let connection, !isNotResponding else { return }
+    // A send that never completed would hold up the log stream for good.
+    if isLogSendInFlight && now - lastLogSentAt > Self.sendStallTimeout {
+      isLogSendInFlight = false
+    }
+    guard !isLogSendInFlight, !isStatePending else { return }
+    if logBudget?.canSend(now: now) == false { return }
+    guard let datagram = logOutbox.nextDatagram(now: now) else { return }
+    logBudget?.charge(datagram.count)
+    isLogSendInFlight = true
+    lastLogSentAt = now
+    let token = connectionToken
+    connection.send(
+      content: datagram, contentContext: logContext, isComplete: true,
+      completion: .contentProcessed { [weak self] error in
+        self?.logSendCompleted(error: error, token: token)
+      })
+  }
+
+  private func logSendCompleted(error: NWError?, token: Int) {
+    guard token == connectionToken else { return }
+    isLogSendInFlight = false
+    if let error {
+      sendFailed(error, kind: "log", token: token)
     }
   }
 
@@ -907,6 +953,7 @@ public final class SourisClient: @unchecked Sendable {
       "logDropped": .int(outbox.dropped),
       "logPacketsSent": .int(outbox.packetsSent),
       "logRetransmits": .int(outbox.retransmits),
+      "logRetransmitTimeoutMs": .double(outbox.retransmitTimeout.milliseconds),
     ]
     let sorted = summary.roundTripsMs.sorted()
     if !sorted.isEmpty {
