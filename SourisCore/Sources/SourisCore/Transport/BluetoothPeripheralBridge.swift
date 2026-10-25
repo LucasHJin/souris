@@ -36,7 +36,8 @@ public enum BluetoothPeripheralEvent: Sendable {
 /// - Packets from the client go out as outbox notifications through a `BluetoothSendQueue`, so the
 ///   newest state replaces an older one that hasn't gone yet. A `BluetoothPacer` spaces the
 ///   notifications so iOS's transmit queue never fills, measuring the link from the round trips
-///   of the client's pings. While states keep coming, a log fragment goes ahead of the state at
+///   of the client's pings, timed from when each ping is handed to Bluetooth so the pacer's own
+///   wait isn't counted. While states keep coming, a log fragment goes ahead of the state at
 ///   most every `largeFragmentSpacing`. Fragments the Mac writes are reassembled and handed to
 ///   the client.
 /// - It asks for the shortest connection interval the Mac allows.
@@ -50,8 +51,12 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
   /// Fragments of large packets allowed to wait; more is a backlog the log outbox will resend.
   private static let maxQueuedLargeFragments = 256
 
-  /// While the cursor moves, a log fragment may take a state's turn this often, seconds.
-  private static let largeFragmentSpacing: TimeInterval = 0.25
+  /// While the cursor moves, a log fragment may take a state's turn this often, seconds. At one
+  /// every 250 ms the phone's 5 Hz stats alone outran it and its log fell behind.
+  private static let largeFragmentSpacing: TimeInterval = 0.1
+
+  /// Pings handed over this long ago without a pong are forgotten, seconds.
+  private static let pingTimeout: TimeInterval = 5
 
   private let queue: DispatchQueue
   private let clientPort: UInt16
@@ -71,6 +76,9 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
   private var isSendScheduled = false
   private var lastLargeSentAt: TimeInterval = 0
   private var reassembler = BluetoothReassembler()
+
+  /// When each ping still waiting for its pong was handed to Bluetooth, by ping id.
+  private var pingsHandedOver: [UInt32: TimeInterval] = [:]
 
   // Counts for the 1 Hz `link` entry.
   private var notificationsSent = 0
@@ -248,8 +256,13 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
     sendQueue.removeNext(kind)
     pacer.didSend(at: now)
     notificationsSent += 1
-    if kind == .large {
+    switch kind {
+    case .small:
+      notePingHandedOver(fragment, at: now)
+    case .large:
       lastLargeSentAt = now
+    case .state:
+      break
     }
     if !sendQueue.isEmpty {
       schedulePump(at: pacer.nextSendTime)
@@ -267,14 +280,24 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
     }
   }
 
+  /// Remembers when a ping went to Bluetooth, if `fragment` holds one.
+  private func notePingHandedOver(_ fragment: Data, at time: TimeInterval) {
+    let packet = Data(fragment.dropFirst(BluetoothFraming.headerSize))
+    guard BluetoothFraming.packetType(of: packet) == .ping,
+      case .ping(let ping) = try? Packet.decode(packet)
+    else { return }
+    pingsHandedOver = pingsHandedOver.filter { time - $0.value < Self.pingTimeout }
+    pingsHandedOver[ping.id] = time
+  }
+
   /// Feeds the round trip of a pong from the Mac to the pacer.
   private func measureRoundTrip(of packet: Data) {
     guard BluetoothFraming.packetType(of: packet) == .pong,
-      case .pong(let pong) = try? Packet.decode(packet)
+      case .pong(let pong) = try? Packet.decode(packet),
+      let handedOver = pingsHandedOver.removeValue(forKey: pong.id)
     else { return }
     let now = ProcessInfo.processInfo.systemUptime
-    let roundTrip = now - Double(pong.phoneTimeMicros) / 1_000_000
-    guard roundTrip >= 0, roundTrip < 5 else { return }
+    let roundTrip = now - handedOver
     pacer.didMeasure(roundTrip: roundTrip, at: now)
     roundTripsMs.append(roundTrip * 1000)
   }
@@ -390,6 +413,7 @@ extension BluetoothPeripheralBridge: CBPeripheralManagerDelegate {
     self.central = central
     reassembler.reset()
     pacer.reset()
+    pingsHandedOver.removeAll()
     peripheral.setDesiredConnectionLatency(.low, for: central)
     log(
       .info, "macSubscribed",
