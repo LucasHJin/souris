@@ -130,10 +130,10 @@ final class AppModel {
     settings = AppSettings()
   }
 
-  /// The buttons scroll only while the app is in front and button scroll is on; otherwise they
-  /// change the volume as usual.
+  /// Souris takes the volume buttons only while the app is in front and they are on; otherwise
+  /// they change the volume as usual.
   private func updateVolumeButtons() {
-    if isActive && settings.pipeline.buttonScroll.isEnabled {
+    if isActive && settings.pipeline.volumeButtons.isEnabled {
       volumeButtons.start()
     } else {
       volumeButtons.stop()

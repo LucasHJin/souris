@@ -192,9 +192,9 @@ import simd
     #expect(abs((steps.last?.state.scroll.y ?? 0) - 100) < 1e-9)
   }
 
-  @Test func pressesWithButtonScrollOffAreIgnored() {
+  @Test func pressesWithTheVolumeButtonsOffAreIgnored() {
     var settings = Synthetic.flatGainSettings
-    settings.buttonScroll.isEnabled = false
+    settings.volumeButtons.isEnabled = false
     let steps = Self.session(at: [1, 1.1]).replay(settings)
     #expect(steps.last?.state.scroll == .zero)
     #expect(steps.allSatisfy { !$0.state.flags.contains(.scrollActive) })
@@ -394,5 +394,51 @@ import simd
     let data = try JSONEncoder().encode(press)
     #expect(try JSONDecoder().decode(ScrollButtonPress.self, from: data) == press)
     #expect(String(decoding: data, as: UTF8.self).contains("\"down\""))
+  }
+
+  // MARK: - Shortcuts
+
+  /// `flatGainSettings` with the volume buttons on their default shortcuts.
+  static var shortcutSettings: PipelineSettings {
+    var settings = Synthetic.flatGainSettings
+    settings.volumeButtons = PipelineSettings.VolumeButtons()
+    return settings
+  }
+
+  @Test func byDefaultUpPressesMissionControlAndDownSpotlight() {
+    var session = Self.session(.up, at: [1])
+    session.scrollPress(.down, at: 2)
+    let steps = session.replay(Self.shortcutSettings)
+    #expect(steps.last?.state.shortcuts[.missionControl] == 1)
+    #expect(steps.last?.state.shortcuts[.spotlight] == 1)
+    #expect(steps.last?.state.shortcuts[.appWindows] == 0)
+    #expect(steps.allSatisfy { $0.state.scroll == .zero })
+    #expect(Self.queued(steps).isEmpty)
+    // The thumb's push still freezes the cursor.
+    #expect(steps.step(at: 1.02).diagnostics.isFrozen)
+    let pressed = steps.events.compactMap { event -> MacShortcut? in
+      if case .shortcutPressed(let shortcut) = event.kind { return shortcut }
+      return nil
+    }
+    #expect(pressed == [.missionControl, .spotlight])
+  }
+
+  @Test func holdingAButtonPressesItsShortcutOnce() {
+    // iOS repeats a held button 0.33 s after the press, then every 42 ms.
+    let held = [1, 1.334] + (1...10).map { 1.334 + Double($0) * 0.042 }
+    let steps = Self.session(.up, at: held + [3]).replay(Self.shortcutSettings)
+    #expect(steps.step(at: 2).state.shortcuts[.missionControl] == 1)
+    #expect(steps.last?.state.shortcuts[.missionControl] == 2)
+  }
+
+  @Test func eachButtonCanScrollOrPressAnyShortcut() {
+    var settings = Self.shortcutSettings
+    settings.volumeButtons.up = .scroll
+    settings.volumeButtons.down = .appWindows
+    var session = Self.session(.up, at: [1])
+    session.scrollPress(.down, at: 2)
+    let steps = session.replay(settings)
+    #expect(abs((steps.last?.state.scroll.y ?? 0) - 100) < 1e-9)
+    #expect(steps.last?.state.shortcuts == ShortcutPresses(counts: [0, 1, 0, 0]))
   }
 }

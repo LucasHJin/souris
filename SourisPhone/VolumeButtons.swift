@@ -5,7 +5,7 @@ import UIKit
 
 import SourisCore
 
-/// Turns volume-button presses into scroll presses.
+/// Reports volume-button presses, which the pipeline turns into scrolling or Mac shortcuts.
 ///
 /// iOS has no button events for apps while ARKit holds the camera, so this watches the media
 /// volume instead: each press moves it one step, and the volume goes back to the middle after
@@ -90,7 +90,7 @@ final class VolumeButtons {
       isSessionActive = true
     } catch {
       log(
-        .error, "session", "Couldn’t activate the audio session, so volume scrolling may not work",
+        .error, "session", "Couldn’t activate the audio session, so the volume buttons may not work",
         ["error": .string(error.localizedDescription)])
     }
   }

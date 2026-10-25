@@ -10,13 +10,15 @@ struct RemoteStateTrackerTests {
     buttons: MouseButtons = [],
     flags: StateFlags = [],
     cursor: SIMD2<Double> = .zero,
-    scroll: SIMD2<Double> = .zero
+    scroll: SIMD2<Double> = .zero,
+    shortcuts: ShortcutPresses = ShortcutPresses()
   ) -> StatePacket {
     StatePacket(
       epoch: epoch,
       seq: seq,
       phoneTimeMicros: 0,
-      state: MouseState(buttons: buttons, flags: flags, cursor: cursor, scroll: scroll))
+      state: MouseState(
+        buttons: buttons, flags: flags, cursor: cursor, scroll: scroll, shortcuts: shortcuts))
   }
 
   /// Applies `packet` and returns the update, recording an issue if the tracker called it stale.
@@ -66,6 +68,31 @@ struct RemoteStateTrackerTests {
     let update = try applied(&tracker, packet(seq: 9, epoch: 2))
     #expect(update.missedPackets == 0)
     #expect(try applied(&tracker, packet(seq: 10, epoch: 2)).missedPackets == 0)
+  }
+
+  // MARK: - Shortcuts
+
+  @Test func shortcutsArePressedOncePerCountedPress() throws {
+    var tracker = RemoteStateTracker()
+    var presses = ShortcutPresses(counts: [5, 0, 0, 9])
+    // The baseline presses nothing, whatever the counts.
+    #expect(try applied(&tracker, packet(seq: 1, shortcuts: presses)).shortcuts.isEmpty)
+    presses.press(.missionControl)
+    #expect(try applied(&tracker, packet(seq: 2, shortcuts: presses)).shortcuts == [.missionControl])
+    // A keepalive repeats the counts: nothing more.
+    #expect(try applied(&tracker, packet(seq: 3, shortcuts: presses)).shortcuts.isEmpty)
+    // A press in a lost packet still comes through with the next one.
+    presses.press(.spotlight)
+    presses.press(.missionControl)
+    let update = try applied(&tracker, packet(seq: 6, shortcuts: presses))
+    #expect(update.shortcuts == [.missionControl, .spotlight])
+  }
+
+  @Test func aNewEpochReplaysNoShortcuts() throws {
+    var tracker = RemoteStateTracker()
+    _ = tracker.apply(packet(seq: 1))
+    let restarted = ShortcutPresses(counts: [3, 1, 0, 0])
+    #expect(try applied(&tracker, packet(seq: 1, epoch: 2, shortcuts: restarted)).shortcuts.isEmpty)
   }
 
   // MARK: - Stale packets

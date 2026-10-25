@@ -49,6 +49,63 @@ public struct StateFlags: OptionSet, Hashable, Codable, Sendable {
   }
 }
 
+/// A Mac action the phone can ask for, which the Mac performs by pressing its own keyboard
+/// shortcut for it. The raw value is the action's place in `ShortcutPresses` on the wire, so new
+/// cases go at the end.
+public enum MacShortcut: Int, CaseIterable, Codable, Sendable {
+  case missionControl
+  case appWindows
+  case showDesktop
+  case spotlight
+
+  /// The name in logs, e.g. `missionControl`.
+  public var logName: String {
+    switch self {
+    case .missionControl: "missionControl"
+    case .appWindows: "appWindows"
+    case .showDesktop: "showDesktop"
+    case .spotlight: "spotlight"
+    }
+  }
+}
+
+/// How many times the phone has asked for each `MacShortcut` this session, wrapping at 256.
+///
+/// Like the motion totals the counts are cumulative, so a lost or replaced packet loses no press
+/// and a repeated one doesn't press twice: the Mac presses each shortcut as often as its count
+/// went up.
+public struct ShortcutPresses: Hashable, Codable, Sendable {
+  /// Indexed by `MacShortcut.rawValue`.
+  public private(set) var counts: [UInt8]
+
+  public init() {
+    counts = Array(repeating: 0, count: MacShortcut.allCases.count)
+  }
+
+  /// Counts read off the wire: missing ones are 0 and unknown ones are dropped.
+  init(counts: some Sequence<UInt8>) {
+    self.init()
+    for (index, count) in zip(self.counts.indices, counts) {
+      self.counts[index] = count
+    }
+  }
+
+  public subscript(shortcut: MacShortcut) -> UInt8 {
+    counts[shortcut.rawValue]
+  }
+
+  public mutating func press(_ shortcut: MacShortcut) {
+    counts[shortcut.rawValue] &+= 1
+  }
+
+  /// The presses since `earlier`, in `MacShortcut` order.
+  public func presses(since earlier: ShortcutPresses) -> [MacShortcut] {
+    MacShortcut.allCases.flatMap { shortcut in
+      Array(repeating: shortcut, count: Int(self[shortcut] &- earlier[shortcut]))
+    }
+  }
+}
+
 /// Everything the phone tells the Mac about the mouse, as absolute state.
 ///
 /// Motion is cumulative so a lost packet loses nothing: the Mac applies the difference from the
@@ -69,15 +126,19 @@ public struct MouseState: Equatable, Codable, Sendable {
   /// the page, the sign of `wheel2`.
   public var scroll: SIMD2<Double>
 
+  public var shortcuts: ShortcutPresses
+
   public init(
     buttons: MouseButtons = [],
     flags: StateFlags = [],
     cursor: SIMD2<Double> = .zero,
-    scroll: SIMD2<Double> = .zero
+    scroll: SIMD2<Double> = .zero,
+    shortcuts: ShortcutPresses = ShortcutPresses()
   ) {
     self.buttons = buttons
     self.flags = flags
     self.cursor = cursor
     self.scroll = scroll
+    self.shortcuts = shortcuts
   }
 }

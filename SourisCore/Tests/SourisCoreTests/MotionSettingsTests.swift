@@ -37,7 +37,9 @@ import Testing
     #expect(!settings.tiltScroll.isEnabled)
     #expect(settings.tiltScroll.levelCaptureLimit == 20)
     #expect(settings.tiltScroll.deadZone == 10)
-    #expect(settings.buttonScroll.isEnabled)
+    #expect(settings.volumeButtons.isEnabled)
+    #expect(settings.volumeButtons.up == .missionControl)
+    #expect(settings.volumeButtons.down == .spotlight)
     #expect(settings.buttonScroll.step == 100)
     #expect(settings.buttonScroll.glideTime == 0.08)
     #expect(!settings.buttonScroll.isReversed)
@@ -103,11 +105,15 @@ import Testing
     settings.buttonScroll.maxHoldMultiplier = 4
     settings.lift.frontDistance = 0.05
     settings.lift.backDistance = 0.1
+    settings.volumeButtons.up = .showDesktop
+    settings.volumeButtons.down = .scroll
+    settings.volumeButtons.repeatWindow = 0.5
     let data = try JSONEncoder().encode(settings)
     #expect(try JSONDecoder().decode(PipelineSettings.self, from: data) == settings)
     let keys = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let groups: Set = [
-      "pointer", "prediction", "tiltScroll", "buttonScroll", "click", "lift", "tracking",
+      "pointer", "prediction", "tiltScroll", "volumeButtons", "buttonScroll", "click", "lift",
+      "tracking",
     ]
     #expect(Set(keys.keys) == groups)
     let lift = try #require(keys["lift"] as? [String: Any])
@@ -131,7 +137,7 @@ import Testing
     expected.lift.threshold = 0.05
     #expect(partial == expected)
     #expect(!partial.tiltScroll.isEnabled)
-    #expect(partial.buttonScroll.isEnabled)
+    #expect(partial.volumeButtons.isEnabled)
   }
 
   @Test func aGroupThatFailsToDecodeFallsBackWithoutLosingTheOthers() throws {

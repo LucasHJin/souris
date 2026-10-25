@@ -7,8 +7,9 @@ enum WireLayout {
 
   /// Payload sizes. Hello and welcome have a fixed part plus a name of up to
   /// `WireProtocol.maxNameBytes`: hello is `epoch u16`, `deviceID` 16 bytes and `nameLength u8`;
-  /// welcome is `status u8` and `nameLength u8`.
-  static let statePayloadSize = 48
+  /// welcome is `status u8` and `nameLength u8`. The state payload ends with a count byte and
+  /// one byte per `MacShortcut`.
+  static let statePayloadSize = 49 + MacShortcut.allCases.count
   static let pingPayloadSize = 12
   static let pongPayloadSize = 20
   static let helloFixedSize = 19

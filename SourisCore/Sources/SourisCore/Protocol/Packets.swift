@@ -25,7 +25,8 @@ public enum PacketType: UInt8, Sendable {
   case state = 1
   case ping = 2
   case pong = 3
-  /// Reserved for Mac-side actions (keyboard shortcuts, media keys). Not implemented yet.
+  /// Reserved. Mac shortcuts ride in the state packet as counts instead (`ShortcutPresses`), so
+  /// a lost packet can't drop one.
   case action = 4
   case hello = 5
   case welcome = 6
@@ -222,6 +223,11 @@ public enum Packet: Equatable, Sendable {
       writer.write(packet.state.cursor.y)
       writer.write(packet.state.scroll.y)
       writer.write(packet.state.scroll.x)
+      let shortcutCounts = packet.state.shortcuts.counts
+      writer.write(UInt8(shortcutCounts.count))
+      for count in shortcutCounts {
+        writer.write(count)
+      }
       return writer.data
     case .ping(let packet):
       var writer = ByteWriter(type: .ping, payloadCapacity: WireLayout.pingPayloadSize)
@@ -293,11 +299,20 @@ public enum Packet: Equatable, Sendable {
       let cursorY = try reader.readDouble()
       let scrollY = try reader.readDouble()
       let scrollX = try reader.readDouble()
+      // Phones built before shortcuts end the packet here.
+      var shortcutCounts: [UInt8] = []
+      if reader.remaining > 0 {
+        let count = try reader.read(UInt8.self)
+        for _ in 0..<count {
+          shortcutCounts.append(try reader.read(UInt8.self))
+        }
+      }
       let state = MouseState(
         buttons: buttons,
         flags: flags,
         cursor: SIMD2(cursorX, cursorY),
-        scroll: SIMD2(scrollX, scrollY))
+        scroll: SIMD2(scrollX, scrollY),
+        shortcuts: ShortcutPresses(counts: shortcutCounts))
       return .state(
         StatePacket(epoch: epoch, seq: seq, phoneTimeMicros: phoneTimeMicros, state: state))
     case .ping:

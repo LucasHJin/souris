@@ -78,9 +78,12 @@ enum Synthetic {
   }
 
   /// Settings with a constant gain of 2.5 pt/mm, so expected cursor motion is exact.
+  /// Constant gain, and volume buttons that scroll, as the button-scroll tests expect.
   static var flatGainSettings: PipelineSettings {
     var settings = PipelineSettings()
     settings.pointer.accelerationRatio = 1
+    settings.volumeButtons.up = .scroll
+    settings.volumeButtons.down = .scroll
     return settings
   }
 

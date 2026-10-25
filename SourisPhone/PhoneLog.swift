@@ -162,6 +162,8 @@ extension PipelineEvent {
         .debug, "scrollPress",
         ["direction": .string(direction.rawValue), "px": .double(pixels.rounded(places: 1))]
       )
+    case .shortcutPressed(let shortcut):
+      return (.info, "shortcut", ["shortcut": .string(shortcut.logName)])
     case .paused(let isPaused):
       return (.info, "paused", ["paused": .bool(isPaused)])
     case .recentered:

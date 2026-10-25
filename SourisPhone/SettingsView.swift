@@ -13,8 +13,9 @@ struct SettingsView: View {
     NavigationStack {
       Form {
         pointerSection
-        scrollSection
+        volumeSection
         wheelSection
+        tiltScrollSection
         clicksSection
         liftSection
         connectionSection
@@ -101,22 +102,54 @@ struct SettingsView: View {
     }
   }
 
-  // MARK: - Scroll
+  // MARK: - Volume buttons
 
-  private var scrollSection: some View {
+  private var volumeSection: some View {
     Section {
-      Toggle("Volume buttons scroll", isOn: $model.settings.pipeline.buttonScroll.isEnabled)
+      Toggle("Volume buttons", isOn: $model.settings.pipeline.volumeButtons.isEnabled)
       Group {
-        SliderRow(
-          title: "Step",
-          value: $model.settings.pipeline.buttonScroll.step,
-          range: 20...400,
-          step: 10,
-          fractionDigits: 0,
-          unit: " px")
-        Toggle("Reverse direction", isOn: $model.settings.pipeline.buttonScroll.isReversed)
+        Picker("Volume up", selection: $model.settings.pipeline.volumeButtons.up) {
+          actionChoices
+        }
+        Picker("Volume down", selection: $model.settings.pipeline.volumeButtons.down) {
+          actionChoices
+        }
+        if model.settings.pipeline.volumeButtons.up == .scroll
+          || model.settings.pipeline.volumeButtons.down == .scroll
+        {
+          SliderRow(
+            title: "Scroll step",
+            value: $model.settings.pipeline.buttonScroll.step,
+            range: 20...400,
+            step: 10,
+            fractionDigits: 0,
+            unit: " px")
+          Toggle("Reverse scrolling", isOn: $model.settings.pipeline.buttonScroll.isReversed)
+        }
       }
-      .disabled(!model.settings.pipeline.buttonScroll.isEnabled)
+      .disabled(!model.settings.pipeline.volumeButtons.isEnabled)
+    } header: {
+      Text("Volume buttons")
+    } footer: {
+      Text(
+        "Mission Control, App windows, Show desktop and Spotlight press the Mac’s own shortcuts "
+          + "for them, from System Settings → Keyboard → Keyboard Shortcuts. Holding a button "
+          + "presses its shortcut once. Set to Scroll, volume up scrolls up one step, and "
+          + "holding keeps scrolling faster. While Souris is open the phone’s volume stays at "
+          + "50%.")
+    }
+  }
+
+  private var actionChoices: some View {
+    ForEach(PipelineSettings.VolumeButtons.Action.allCases, id: \.self) { action in
+      Text(action.title).tag(action)
+    }
+  }
+
+  // MARK: - Tilt scroll
+
+  private var tiltScrollSection: some View {
+    Section {
       Toggle("Tilt to scroll", isOn: $model.settings.pipeline.tiltScroll.isEnabled)
       if model.settings.pipeline.tiltScroll.isEnabled {
         SliderRow(
@@ -135,12 +168,11 @@ struct SettingsView: View {
         Toggle("Reverse tilt", isOn: $model.settings.pipeline.tiltScroll.isReversed)
       }
     } header: {
-      Text("Scroll")
+      Text("Tilt scroll")
     } footer: {
       Text(
-        "Volume up scrolls up one step; hold a button to keep scrolling faster. While Souris is "
-          + "open the phone’s volume stays at 50%. Tilt to scroll freezes the pointer while it "
-          + "scrolls, and takes over tilting from the pointer.")
+        "Tilt to scroll freezes the pointer while it scrolls, and takes over tilting from the "
+          + "pointer.")
     }
   }
 
@@ -438,6 +470,19 @@ struct SettingsView: View {
           addressDraft = ""
         }
       }
+    }
+  }
+}
+
+extension PipelineSettings.VolumeButtons.Action {
+  /// The name in the volume-button pickers.
+  fileprivate var title: String {
+    switch self {
+    case .scroll: "Scroll"
+    case .missionControl: "Mission Control"
+    case .appWindows: "App windows"
+    case .showDesktop: "Show desktop"
+    case .spotlight: "Spotlight"
     }
   }
 }

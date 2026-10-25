@@ -124,11 +124,59 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     }
   }
 
-  /// Volume-button scrolling: each press queues a distance that glides out over a fraction of a
-  /// second.
-  public struct ButtonScroll: Codable, Equatable, Sendable {
+  /// What each volume button does.
+  public struct VolumeButtons: Codable, Equatable, Sendable {
+    /// What a press does.
+    public enum Action: String, CaseIterable, Codable, Sendable {
+      /// Scrolls a step in the button's direction (see `ButtonScroll`).
+      case scroll
+      case missionControl
+      case appWindows
+      case showDesktop
+      case spotlight
+
+      /// The Mac shortcut a press asks for, or nil for scrolling.
+      public var shortcut: MacShortcut? {
+        switch self {
+        case .scroll: nil
+        case .missionControl: .missionControl
+        case .appWindows: .appWindows
+        case .showDesktop: .showDesktop
+        case .spotlight: .spotlight
+        }
+      }
+    }
+
+    /// Off, the buttons change the phone's volume as usual.
     public var isEnabled = true
 
+    public var up = Action.missionControl
+    public var down = Action.spotlight
+
+    /// A press this soon after the previous one on the same button is iOS repeating a held
+    /// button, so it doesn't press a shortcut again, seconds. iOS repeats 0.33 s after the press,
+    /// then every 42 ms.
+    public var repeatWindow: TimeInterval = 0.4
+
+    public init() {}
+
+    public init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let defaults = VolumeButtons()
+      isEnabled = try container.decode(.isEnabled, default: defaults.isEnabled)
+      up = try container.decode(.up, default: defaults.up)
+      down = try container.decode(.down, default: defaults.down)
+      repeatWindow = try container.decode(.repeatWindow, default: defaults.repeatWindow)
+    }
+
+    public func action(for direction: ScrollButtonPress.Direction) -> Action {
+      direction == .up ? up : down
+    }
+  }
+
+  /// How a volume button set to scroll scrolls: each press queues a distance that glides out over
+  /// a fraction of a second.
+  public struct ButtonScroll: Codable, Equatable, Sendable {
     /// Pixels queued by one press.
     public var step: Double = 100
 
@@ -154,7 +202,6 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     public init(from decoder: any Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       let defaults = ButtonScroll()
-      isEnabled = try container.decode(.isEnabled, default: defaults.isEnabled)
       step = try container.decode(.step, default: defaults.step)
       glideTime = try container.decode(.glideTime, default: defaults.glideTime)
       isReversed = try container.decode(.isReversed, default: defaults.isReversed)
@@ -285,6 +332,7 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
   public var pointer = Pointer()
   public var prediction = Prediction()
   public var tiltScroll = TiltScroll()
+  public var volumeButtons = VolumeButtons()
   public var buttonScroll = ButtonScroll()
   public var click = Click()
   public var lift = Lift()
@@ -304,6 +352,8 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
       ?? defaults.prediction
     tiltScroll = (try? container.decodeIfPresent(TiltScroll.self, forKey: .tiltScroll))
       ?? defaults.tiltScroll
+    volumeButtons = (try? container.decodeIfPresent(VolumeButtons.self, forKey: .volumeButtons))
+      ?? defaults.volumeButtons
     buttonScroll = (try? container.decodeIfPresent(ButtonScroll.self, forKey: .buttonScroll))
       ?? defaults.buttonScroll
     click = (try? container.decodeIfPresent(Click.self, forKey: .click)) ?? defaults.click

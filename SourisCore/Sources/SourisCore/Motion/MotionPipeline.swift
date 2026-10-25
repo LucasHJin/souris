@@ -194,6 +194,9 @@ public struct MotionPipeline: Sendable {
   private var isPaused = false
   private var scrollTilt = ScrollTilt()
   private var buttonScroll = ButtonScroll()
+
+  /// When each volume button was last pressed, repeats included, uptime seconds.
+  private var lastVolumePress: [ScrollButtonPress.Direction: TimeInterval] = [:]
   private var liftClutch = LiftClutch()
 
   /// The latest lift height, the height the lift clutch watches, metres.
@@ -392,18 +395,32 @@ public struct MotionPipeline: Sendable {
     finishInput()
   }
 
-  /// Feeds one volume-button press. Ignored while paused or with button scroll off. Otherwise it
-  /// queues a step of scrolling (see `PipelineSettings.ButtonScroll`) and starts a click freeze,
-  /// since the thumb's push nudges the phone.
+  /// Feeds one volume-button press. Ignored while paused or with the volume buttons off.
+  /// Otherwise it does the button's action (see `PipelineSettings.VolumeButtons`): queues a step
+  /// of scrolling (see `PipelineSettings.ButtonScroll`) or presses a Mac shortcut, unless the
+  /// press is iOS repeating a held button. Either way it starts a click freeze, since the thumb's
+  /// push nudges the phone.
   public mutating func handle(_ press: ScrollButtonPress) {
     inputTime = press.time
-    guard settings.buttonScroll.isEnabled, !isPaused else { return }
-    let queued = buttonScroll.press(press, settings: settings.buttonScroll)
-    diagnostics.scrollPresses += 1
-    if queued.startedGlide {
-      emit(.scrollStarted(source: .buttons))
+    guard settings.volumeButtons.isEnabled, !isPaused else { return }
+    let previousPress = lastVolumePress[press.direction]
+    lastVolumePress[press.direction] = press.time
+    if let shortcut = settings.volumeButtons.action(for: press.direction).shortcut {
+      let isRepeat = previousPress.map {
+        press.time - $0 <= settings.volumeButtons.repeatWindow
+      } ?? false
+      if !isRepeat {
+        state.shortcuts.press(shortcut)
+        emit(.shortcutPressed(shortcut))
+      }
+    } else {
+      let queued = buttonScroll.press(press, settings: settings.buttonScroll)
+      diagnostics.scrollPresses += 1
+      if queued.startedGlide {
+        emit(.scrollStarted(source: .buttons))
+      }
+      emit(.scrollPress(direction: press.direction, pixels: queued.pixels))
     }
-    emit(.scrollPress(direction: press.direction, pixels: queued.pixels))
     clickFreeze.trigger(at: press.time, duration: settings.click.freezeDuration)
     finishInput()
   }

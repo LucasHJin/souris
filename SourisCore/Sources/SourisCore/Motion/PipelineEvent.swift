@@ -54,6 +54,9 @@ public struct PipelineEvent: Equatable, Codable, Sendable {
     /// included).
     case scrollPress(direction: ScrollButtonPress.Direction, pixels: Double)
 
+    /// A volume button asked the Mac for a shortcut.
+    case shortcutPressed(MacShortcut)
+
     case paused(Bool)
 
     case recentered

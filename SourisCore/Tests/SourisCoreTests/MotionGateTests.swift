@@ -406,7 +406,7 @@ import simd
   // MARK: - Event buffer
 
   @Test func theEventBufferKeepsTheNewest512() {
-    var pipeline = MotionPipeline()
+    var pipeline = MotionPipeline(settings: Synthetic.flatGainSettings)
     for index in 0..<600 {
       pipeline.handle(ScrollButtonPress(direction: .up, time: Double(index) * 0.01))
     }
@@ -422,7 +422,7 @@ import simd
   }
 
   @Test func drainingEmptiesTheBufferInOrder() {
-    var pipeline = MotionPipeline()
+    var pipeline = MotionPipeline(settings: Synthetic.flatGainSettings)
     pipeline.handle(ScrollButtonPress(direction: .down, time: 3))
     pipeline.recenter()
     pipeline.handle(ScrollButtonPress(direction: .down, time: 3.125))

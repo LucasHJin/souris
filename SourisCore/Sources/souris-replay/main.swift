@@ -155,6 +155,8 @@ func describe(_ event: PipelineEvent) -> String {
     kind = "scroll ended (\(source.rawValue)), \(format(pixels)) px"
   case .scrollPress(let direction, let pixels):
     kind = "scroll press \(direction.rawValue), \(format(pixels)) px queued"
+  case .shortcutPressed(let shortcut):
+    kind = "shortcut \(shortcut.logName)"
   case .paused(let isPaused):
     kind = isPaused ? "paused" : "unpaused"
   case .recentered:

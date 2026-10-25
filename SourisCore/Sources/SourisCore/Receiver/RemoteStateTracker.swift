@@ -31,7 +31,7 @@ public struct ButtonChange: Equatable, Sendable {
 /// What the Mac should do in response to one state packet.
 ///
 /// Apply in this order: `cursorDelta`, then `buttonChanges` in array order (releases come before
-/// presses), then `scrollEvents` in array order.
+/// presses), then `scrollEvents` in array order, then `shortcuts`.
 public struct InputUpdate: Equatable, Sendable {
   /// Screen points to move, +y down.
   public var cursorDelta: SIMD2<Double>
@@ -39,6 +39,9 @@ public struct InputUpdate: Equatable, Sendable {
   public var buttonChanges: [ButtonChange]
 
   public var scrollEvents: [ScrollEvent]
+
+  /// Mac shortcuts to press, in order.
+  public var shortcuts: [MacShortcut]
 
   /// State packets missing between the last one applied and this one: lost, or replaced by a
   /// newer one before they went, as Bluetooth does. The motion then spans the whole gap.
@@ -48,17 +51,19 @@ public struct InputUpdate: Equatable, Sendable {
     cursorDelta: SIMD2<Double> = .zero,
     buttonChanges: [ButtonChange] = [],
     scrollEvents: [ScrollEvent] = [],
+    shortcuts: [MacShortcut] = [],
     missedPackets: Int = 0
   ) {
     self.cursorDelta = cursorDelta
     self.buttonChanges = buttonChanges
     self.scrollEvents = scrollEvents
+    self.shortcuts = shortcuts
     self.missedPackets = missedPackets
   }
 
   /// True when there's nothing to post.
   public var isEmpty: Bool {
-    cursorDelta == .zero && buttonChanges.isEmpty && scrollEvents.isEmpty
+    cursorDelta == .zero && buttonChanges.isEmpty && scrollEvents.isEmpty && shortcuts.isEmpty
   }
 }
 
@@ -98,6 +103,8 @@ public struct PacketStats: Equatable, Sendable {
 /// - Scroll phases come from `StateFlags.scrollActive`: off → on is `.began` (with that packet's
 ///   delta), on → on is `.changed` (only when the delta isn't zero), on → off is `.changed` for any
 ///   remaining delta and then `.ended`.
+/// - Shortcuts are pressed as often as their counts rose since the last applied packet. A
+///   baseline packet presses none, so a phone that restarts never replays old presses.
 /// - A packet whose cursor or scroll totals aren't finite is dropped and counted as stale, so one
 ///   bad packet can't poison the baseline.
 public struct RemoteStateTracker: Sendable {
@@ -115,6 +122,7 @@ public struct RemoteStateTracker: Sendable {
   private var lastSeq: UInt32 = 0
   private var lastCursor: SIMD2<Double> = .zero
   private var lastScroll: SIMD2<Double> = .zero
+  private var lastShortcuts = ShortcutPresses()
 
   /// True until the next applied packet has set a new baseline for the motion totals.
   private var needsBaseline = true
@@ -155,11 +163,13 @@ public struct RemoteStateTracker: Sendable {
     if !needsBaseline {
       update.cursorDelta = state.cursor - lastCursor
       scrollDelta = state.scroll - lastScroll
+      update.shortcuts = state.shortcuts.presses(since: lastShortcuts)
     }
     needsBaseline = false
     lastSeq = packet.seq
     lastCursor = state.cursor
     lastScroll = state.scroll
+    lastShortcuts = state.shortcuts
     stats.received += 1
 
     update.buttonChanges = updateButtons(to: state.buttons.intersection(Self.postableButtons))

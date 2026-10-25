@@ -48,6 +48,7 @@ final class InputController: @unchecked Sendable {
   }
 
   private let poster: EventPoster
+  private let shortcutPoster = ShortcutPoster()
   private let log: MacLog
   private var tracker = RemoteStateTracker()
   private var isSilent = false
@@ -113,6 +114,7 @@ final class InputController: @unchecked Sendable {
           logButtons(update.buttonChanges)
         }
         post(update, phoneTime: Double(packet.phoneTimeMicros) / 1_000_000)
+        press(update.shortcuts)
       }
       countPacket()
 
@@ -236,6 +238,25 @@ final class InputController: @unchecked Sendable {
       // few points.
       show(playout.flush())
       poster.post(InputUpdate(buttonChanges: update.buttonChanges))
+    }
+  }
+
+  /// Presses the Mac shortcuts the phone asked for, logging each.
+  private func press(_ shortcuts: [MacShortcut]) {
+    for shortcut in shortcuts {
+      var fields: [String: LogValue] = ["shortcut": .string(shortcut.logName)]
+      var level = LogLevel.info
+      switch shortcutPoster.press(shortcut) {
+      case .pressed(let combo):
+        fields["keyCode"] = .int(Int(combo.keyCode))
+        fields["flags"] = .string(String(combo.flags.rawValue, radix: 16))
+      case .openedMissionControl:
+        fields["opened"] = .string("Mission Control")
+      case .disabled:
+        fields["disabled"] = .bool(true)
+        level = .warning
+      }
+      log.log(level, "input", "shortcut", nil, fields)
     }
   }
 

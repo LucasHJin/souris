@@ -15,7 +15,8 @@ struct PacketCodingTests {
       buttons: [.left, .middle],
       flags: [.trackingLimited, .paused],
       cursor: SIMD2(1.5, -2.25),
-      scroll: SIMD2(-0.5, 3.0)))
+      scroll: SIMD2(-0.5, 3.0),
+      shortcuts: ShortcutPresses(counts: [2, 0, 0, 0xFF])))
 
   static let sampleEntry = LogEntry(
     time: 1234.5678,
@@ -62,8 +63,42 @@ struct PacketCodingTests {
     #expect(try Packet.decode(packet.encoded()) == packet)
   }
 
-  @Test func statePacketIs52Bytes() {
-    #expect(Packet.state(Self.sampleState).encoded().count == 52)
+  @Test func statePacketIs57Bytes() {
+    #expect(Packet.state(Self.sampleState).encoded().count == 57)
+  }
+
+  @Test func aStatePacketFromBeforeShortcutsDecodesWithNoPresses() throws {
+    let encoded = Packet.state(Self.sampleState).encoded()
+    let old = encoded.prefix(52)
+    guard case .state(let decoded) = try Packet.decode(old) else {
+      Issue.record("Expected a state packet")
+      return
+    }
+    #expect(decoded.state.shortcuts == ShortcutPresses())
+    #expect(decoded.state.cursor == Self.sampleState.state.cursor)
+  }
+
+  @Test func shortcutCountsFromANewerPhoneAreKeptOrDropped() throws {
+    var bytes = Array(Packet.state(Self.sampleState).encoded().prefix(52))
+    // Six counts, two more than this build knows.
+    bytes += [6, 1, 2, 3, 4, 5, 6]
+    guard case .state(let decoded) = try Packet.decode(Data(bytes)) else {
+      Issue.record("Expected a state packet")
+      return
+    }
+    #expect(decoded.state.shortcuts.counts == [1, 2, 3, 4])
+  }
+
+  @Test func shortcutPressesCountTheWrappingDifference() {
+    var earlier = ShortcutPresses(counts: [0xFF, 3, 0, 0])
+    var later = earlier
+    later.press(.missionControl)
+    later.press(.missionControl)
+    later.press(.spotlight)
+    #expect(later[.missionControl] == 1)
+    #expect(later.presses(since: earlier) == [.missionControl, .missionControl, .spotlight])
+    earlier = later
+    #expect(later.presses(since: earlier).isEmpty)
   }
 
   @Test func unknownButtonAndFlagBitsArePreserved() throws {
@@ -117,6 +152,8 @@ struct PacketCodingTests {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xC0,  // cursorY = -2.25
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40,  // scrollY = 3.0
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xE0, 0xBF,  // scrollX = -0.5
+      0x04,  // shortcut count
+      0x02, 0x00, 0x00, 0xFF,  // Mission Control, App windows, Show desktop, Spotlight presses
     ]
     #expect(Array(Packet.state(Self.sampleState).encoded()) == golden)
   }
@@ -286,6 +323,8 @@ struct PacketCodingTests {
   func everyTruncationIsRejected(packet: Packet) {
     let bytes = packet.encoded()
     for length in 0..<bytes.count {
+      // A state packet that ends where phones built before shortcuts end it is whole.
+      if case .state = packet, length == 52 { continue }
       let expected: PacketDecodeError = length < 4 ? .tooShort : .truncated
       #expect(throws: expected, "length \(length) of \(bytes.count)") {
         try Packet.decode(bytes.prefix(length))
