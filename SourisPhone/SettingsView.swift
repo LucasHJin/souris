@@ -131,14 +131,6 @@ struct SettingsView: View {
   private var clicksSection: some View {
     Section {
       SliderRow(
-        title: "Right-click window",
-        value: $model.settings.touch.twoFingerWindow,
-        range: 0.02...0.12,
-        step: 0.005,
-        displayFactor: 1000,
-        fractionDigits: 0,
-        unit: " ms")
-      SliderRow(
         title: "Click freeze",
         value: $model.settings.pipeline.click.freezeDuration,
         range: 0...0.2,
@@ -150,7 +142,9 @@ struct SettingsView: View {
     } header: {
       Text("Clicks")
     } footer: {
-      Text("A second finger landing inside the right-click window makes a right click.")
+      Text(
+        "Tap the left half of the top area to left-click and the right half to right-click. Two "
+          + "quick taps on the left half double-click.")
     }
   }
 
