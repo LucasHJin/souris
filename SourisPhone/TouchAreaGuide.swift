@@ -2,9 +2,10 @@ import SwiftUI
 
 import SourisCore
 
-/// Marks the touch area: a hairline at its lower edge, another down the middle between the left
-/// and right buttons, a faint lightening over each half while its button is held, and the scroll
-/// wheel on the middle line.
+/// Marks the touch area: hairlines at its lower edges and down the middle between the left and
+/// right buttons, and one between the left button and the Enter key below it; a faint lightening
+/// over each button while it is held and over the Enter key while touched; a faint return arrow
+/// on the Enter key; and the scroll wheel on the middle line.
 struct TouchAreaGuide: View {
   let touch: TouchSettings
   let controller: TouchController
@@ -13,36 +14,59 @@ struct TouchAreaGuide: View {
 
   var body: some View {
     GeometryReader { proxy in
-      let height = proxy.size.height * touch.acceptedFraction
+      let size = proxy.size
+      let half = size.width / 2
+      let areaBottom = size.height * CGFloat(touch.acceptedFraction)
+      let classifier = TouchClassifier(settings: touch)
+      let enterKey = classifier.returnKeyRect(in: size)
       let hairline = 1 / displayScale
-      ZStack(alignment: .top) {
-        HStack(spacing: 0) {
-          pressShade(for: .left)
-          pressShade(for: .right)
+      ZStack(alignment: .topLeading) {
+        pressShade(isLit: controller.heldButtons.contains(.left))
+          .frame(width: half, height: enterKey?.minY ?? areaBottom)
+        pressShade(isLit: controller.heldButtons.contains(.right))
+          .frame(width: half, height: areaBottom)
+          .offset(x: half)
+        if let enterKey {
+          pressShade(isLit: controller.isReturnKeyTouched)
+            .frame(width: enterKey.width, height: enterKey.height)
+            .offset(x: enterKey.minX, y: enterKey.minY)
+          Image(systemName: "return")
+            .font(.system(size: 20, weight: .regular))
+            .foregroundStyle(.white.opacity(controller.isReturnKeyTouched ? 0.4 : 0.16))
+            .animation(.easeOut(duration: 0.08), value: controller.isReturnKeyTouched)
+            .frame(width: enterKey.width, height: enterKey.height)
+            .offset(x: enterKey.minX, y: enterKey.minY)
+          line(width: half, height: hairline)
+            .offset(y: enterKey.minY)
         }
-        .frame(height: height)
-        .animation(.easeOut(duration: 0.08), value: controller.heldButtons)
-        Color.white
-          .opacity(0.1)
-          .frame(width: hairline, height: height)
-        Color.white
-          .opacity(0.1)
-          .frame(height: hairline)
-          .offset(y: height)
-        if let wheel = TouchClassifier(settings: touch).wheelRect(in: proxy.size) {
+        line(width: hairline, height: max(areaBottom, enterKey?.maxY ?? 0))
+          .offset(x: half - hairline / 2)
+        line(width: half, height: hairline)
+          .offset(y: enterKey?.maxY ?? areaBottom)
+        line(width: half, height: hairline)
+          .offset(x: half, y: areaBottom)
+        if let wheel = classifier.wheelRect(in: size) {
           WheelStrip(
             controller: controller, notchSpacing: touch.wheel.notchSpacing, hairline: hairline)
             .frame(width: wheel.width, height: wheel.height)
-            .offset(y: wheel.minY)
+            .offset(x: wheel.minX, y: wheel.minY)
         }
       }
-      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .allowsHitTesting(false)
   }
 
-  private func pressShade(for button: MouseButtons) -> some View {
-    Color.white.opacity(controller.heldButtons.contains(button) ? 0.06 : 0)
+  private func pressShade(isLit: Bool) -> some View {
+    Color.white
+      .opacity(isLit ? 0.06 : 0)
+      .animation(.easeOut(duration: 0.08), value: isLit)
+  }
+
+  private func line(width: CGFloat, height: CGFloat) -> some View {
+    Color.white
+      .opacity(0.1)
+      .frame(width: width, height: height)
   }
 }
 

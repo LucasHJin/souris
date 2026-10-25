@@ -377,7 +377,8 @@ public struct MotionPipeline: Sendable {
     finishInput()
   }
 
-  /// Feeds one event from the touch classifier.
+  /// Feeds one event from the touch classifier. An Enter key tap presses Return on the Mac unless
+  /// paused.
   public mutating func handle(_ event: TouchEvent) {
     inputTime = event.time
     switch event {
@@ -388,6 +389,11 @@ public struct MotionPipeline: Sendable {
         state.buttons.remove(button.mask)
       } else if !isPaused {
         state.buttons.insert(button.mask)
+      }
+    case .returnKey:
+      if !isPaused {
+        state.shortcuts.press(.returnKey)
+        emit(.shortcutPressed(.returnKey))
       }
     }
     clickFreeze.trigger(at: event.time, duration: settings.click.freezeDuration)

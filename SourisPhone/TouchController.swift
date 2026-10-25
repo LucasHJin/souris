@@ -10,7 +10,8 @@ import SourisCore
 ///
 /// A touch that begins on the wheel rolls it instead of pressing a button, a tap on it is a
 /// middle click, and holding it still dictates on the Mac until it lifts: a firm tap says the
-/// Mac's Dictation is listening, a light one that the hold ended. While the wheel is touched,
+/// Mac's Dictation is listening, a light one that the hold ended. A tap on the Enter key presses
+/// Return on the Mac with a firm tap. While the wheel is touched,
 /// spinning or letting out its scrolling, a display link advances it every refresh, and each
 /// notch it passes plays a haptic tick.
 ///
@@ -23,6 +24,9 @@ final class TouchController {
 
   /// The buttons the classifier reports as held, for the press feedback on screen.
   private(set) var heldButtons: MouseButtons = []
+
+  /// Whether a finger is on the Enter key, for its feedback on screen.
+  private(set) var isReturnKeyTouched = false
 
   /// The wheel's turn in notches, whether a finger is on it, whether it is dictating and whether
   /// the Mac's Dictation listens to that, for drawing it.
@@ -40,7 +44,8 @@ final class TouchController {
   @ObservationIgnored private let engine: MouseEngine
   @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
   @ObservationIgnored private let tickHaptic = UIImpactFeedbackGenerator(style: .rigid)
-  @ObservationIgnored private let dictationHaptic = UIImpactFeedbackGenerator(style: .medium)
+  /// For Dictation listening and the Enter key.
+  @ObservationIgnored private let firmHaptic = UIImpactFeedbackGenerator(style: .medium)
   @ObservationIgnored private var lastTickAt: TimeInterval = 0
   @ObservationIgnored private var frameTicker: FrameTicker?
   @ObservationIgnored private var pendingAdvance: DispatchWorkItem?
@@ -79,13 +84,17 @@ final class TouchController {
         if hapticsEnabled {
           tickHaptic.prepare()
           haptic.prepare()
-          dictationHaptic.prepare()
+          firmHaptic.prepare()
         }
         handle(wheel.touchBegan(y: Double(location.y), time: touch.timestamp))
         continue
       }
-      if hapticsEnabled, location.y < size.height * classifier.settings.acceptedFraction {
-        haptic.prepare()
+      if hapticsEnabled {
+        if classifier.isOnReturnKey(location, in: size) {
+          firmHaptic.prepare()
+        } else if location.y < size.height * classifier.settings.acceptedFraction {
+          haptic.prepare()
+        }
       }
       forward(classifier.touchBegan(id: id, location: location, in: size, time: touch.timestamp))
     }
@@ -140,8 +149,12 @@ final class TouchController {
   private func forward(_ events: [TouchEvent]) {
     guard !events.isEmpty else { return }
     if hapticsEnabled {
-      for case .button(_, true, _) in events {
-        haptic.impactOccurred()
+      for event in events {
+        switch event {
+        case .button(_, true, _): haptic.impactOccurred()
+        case .returnKey: firmHaptic.impactOccurred(intensity: 1)
+        case .button, .contact: break
+        }
       }
     }
     engine.handle(touchEvents: events)
@@ -152,6 +165,9 @@ final class TouchController {
     let held = classifier.heldButtons
     if held != heldButtons {
       heldButtons = held
+    }
+    if classifier.isReturnKeyTouched != isReturnKeyTouched {
+      isReturnKeyTouched = classifier.isReturnKeyTouched
     }
 
     pendingAdvance?.cancel()
@@ -203,7 +219,7 @@ final class TouchController {
     guard listening != isDictationListening else { return }
     isDictationListening = listening
     if listening && hapticsEnabled {
-      dictationHaptic.impactOccurred(intensity: 1)
+      firmHaptic.impactOccurred(intensity: 1)
     }
   }
 

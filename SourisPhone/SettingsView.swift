@@ -17,6 +17,7 @@ struct SettingsView: View {
         wheelSection
         tiltScrollSection
         clicksSection
+        returnKeySection
         liftSection
         connectionSection
         networkSection
@@ -274,6 +275,48 @@ struct SettingsView: View {
         "Tap the left half of the top area to left-click and the right half to right-click. Two "
           + "quick taps on the left half double-click. A tap on the scroll wheel between them "
           + "middle-clicks.")
+    }
+  }
+
+  // MARK: - Enter key
+
+  private var returnKeySection: some View {
+    Section {
+      Toggle("Enter key", isOn: $model.settings.touch.returnKey.isEnabled)
+      Group {
+        SliderRow(
+          title: "Starts at",
+          value: $model.settings.touch.returnKey.top,
+          range: 0.2...0.6,
+          step: 0.01,
+          displayFactor: 100,
+          fractionDigits: 0,
+          unit: "% down")
+        SliderRow(
+          title: "Ends at",
+          value: $model.settings.touch.returnKey.bottom,
+          range: 0.3...0.8,
+          step: 0.01,
+          displayFactor: 100,
+          fractionDigits: 0,
+          unit: "% down")
+        SliderRow(
+          title: "Longest tap",
+          value: $model.settings.touch.returnKey.maxTapDuration,
+          range: 0.2...1,
+          step: 0.05,
+          displayFactor: 1000,
+          fractionDigits: 0,
+          unit: " ms")
+      }
+      .disabled(!model.settings.touch.returnKey.isEnabled)
+    } header: {
+      Text("Enter key")
+    } footer: {
+      Text(
+        "Tap below the left button, where the return arrow is, to press Return on the Mac. It "
+          + "presses when you lift, with a firm tap, and only for a tap: a longer touch, like a "
+          + "resting palm, does nothing. The left button ends where the key starts.")
     }
   }
 

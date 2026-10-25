@@ -144,10 +144,16 @@ final class MouseEngine: @unchecked Sendable {
       for event in touchEvents {
         recorder?.record(.touch(event))
         pipeline.handle(event)
-        if case .button(let button, let isDown, _) = event {
+        switch event {
+        case .button(let button, let isDown, _):
           logNow(
             .debug, "touch", isDown ? "down" : "up",
             fields: ["button": .string(String(describing: button))])
+        case .returnKey(let heldFor, _):
+          logNow(
+            .debug, "touch", "returnKey", fields: ["heldMs": .double((heldFor * 1000).rounded())])
+        case .contact:
+          break
         }
       }
       drainPipelineEvents()

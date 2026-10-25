@@ -54,13 +54,16 @@ public struct StateFlags: OptionSet, Hashable, Codable, Sendable {
 }
 
 /// A Mac action the phone can ask for, which the Mac performs by pressing its own keyboard
-/// shortcut for it. The raw value is the action's place in `ShortcutPresses` on the wire, so new
-/// cases go at the end.
+/// shortcut for it, or a key. The raw value is the action's place in `ShortcutPresses` on the
+/// wire, so new cases go at the end.
 public enum MacShortcut: Int, CaseIterable, Codable, Sendable {
   case missionControl
   case appWindows
   case showDesktop
   case spotlight
+
+  /// The Return key, from the phone's Enter key.
+  case returnKey
 
   /// The name in logs, e.g. `missionControl`.
   public var logName: String {
@@ -69,6 +72,7 @@ public enum MacShortcut: Int, CaseIterable, Codable, Sendable {
     case .appWindows: "appWindows"
     case .showDesktop: "showDesktop"
     case .spotlight: "spotlight"
+    case .returnKey: "returnKey"
     }
   }
 }

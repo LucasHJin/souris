@@ -9,11 +9,16 @@ public enum TouchEvent: Equatable, Codable, Sendable {
   /// A mouse button changed. `time` is when the change took effect, on the same clock.
   case button(MouseButton, isDown: Bool, time: TimeInterval)
 
+  /// A tap on the Enter key, which presses Return on the Mac. `heldFor` is how long the finger
+  /// was down; `time` is when it lifted.
+  case returnKey(heldFor: TimeInterval, time: TimeInterval)
+
   /// The event's time.
   public var time: TimeInterval {
     switch self {
     case .contact(let time): time
     case .button(_, _, let time): time
+    case .returnKey(_, let time): time
     }
   }
 }
