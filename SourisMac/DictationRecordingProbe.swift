@@ -1,8 +1,7 @@
 import CoreAudio
 import Foundation
 
-/// Reads whether macOS's Dictation is recording, from Core Audio's per-process and per-device
-/// state.
+/// Reads whether macOS's Dictation is recording, from Core Audio's per-process state.
 ///
 /// Dictation records through `corespeechd` (`com.apple.CoreSpeech`), whose input runs exactly
 /// while Dictation's own log says it listens, plus the 0.25 s before that while the microphone
@@ -11,9 +10,10 @@ import Foundation
 /// permission.
 ///
 /// `corespeechd`'s input also runs while the Mac plays sound, for Siri's self-trigger detector,
-/// which taps the Mac's output rather than a microphone. So a microphone must be running too: one
-/// that isn't a virtual or aggregate device. Another app recording while sound plays, as on a
-/// call, still reads as Dictation.
+/// which taps the Mac's output, and this can't yet tell that from Dictation. Requiring the
+/// microphone to be running didn't work: the built-in microphone's
+/// `kAudioDevicePropertyDeviceIsRunningSomewhere` stays 0 while Dictation records through it
+/// (2026-10-25). `details()` reads the other candidates for the log.
 ///
 /// Core Audio sends no change notifications for other processes' state (tested on macOS 26.6), so
 /// call `isRecording(at:)` on a timer. Not thread-safe.
@@ -48,14 +48,45 @@ final class DictationRecordingProbe {
   /// Every device seen, with whether it is a microphone, so a rescan reads only new ones.
   private var isMicrophone: [AudioObjectID: Bool] = [:]
 
-  /// Whether one of Dictation's processes is recording from a microphone now.
+  /// What else Core Audio shows while Dictation's processes record or stop, for the log.
+  struct Details {
+    /// A microphone (not a virtual or aggregate device) is running.
+    var isMicrophoneRunning: Bool
+
+    /// The input devices Core Audio lists for `corespeechd`.
+    var speechInputDevices: Int
+
+    /// `corespeechd` runs output.
+    var isSpeechOutputRunning: Bool
+
+    /// The default output device runs, as while the Mac plays sound.
+    var isOutputRunning: Bool
+  }
+
+  /// Whether one of Dictation's processes is recording now.
   func isRecording(at time: TimeInterval) -> Bool {
     if scannedAt.map({ time - $0 >= Self.rescanInterval }) ?? true {
       rescan()
       scannedAt = time
     }
     return processes.contains(where: Self.isRunningInput)
-      && microphones.contains(where: Self.isRunningSomewhere)
+  }
+
+  /// Reads the `Details` now, from the last scan's processes and devices.
+  func details() -> Details {
+    let speech = processes.first { bundleIDs[$0] == "com.apple.CoreSpeech" }
+    let output = Self.value(
+      of: kAudioHardwarePropertyDefaultOutputDevice, for: AudioObjectID(kAudioObjectSystemObject))
+    return Details(
+      isMicrophoneRunning: microphones.contains(where: Self.isRunningSomewhere),
+      speechInputDevices: speech.map {
+        Self.objects(kAudioProcessPropertyDevices, of: $0, scope: kAudioObjectPropertyScopeInput)
+          .count
+      } ?? 0,
+      isSpeechOutputRunning: speech.map {
+        Self.value(of: kAudioProcessPropertyIsRunningOutput, for: $0).map { $0 != 0 } ?? false
+      } ?? false,
+      isOutputRunning: output.map(Self.isRunningSomewhere) ?? false)
   }
 
   private func rescan() {

@@ -67,6 +67,18 @@ final class DictationDriver {
 
   // MARK: - Private
 
+  /// The probe's `Details`, to find what tells Dictation from Siri's self-trigger detector, which
+  /// records while the Mac plays sound.
+  private func probeFields() -> [String: LogValue] {
+    let details = probe.details()
+    return [
+      "micRunning": .bool(details.isMicrophoneRunning),
+      "speechInputDevices": .int(details.speechInputDevices),
+      "speechOutput": .bool(details.isSpeechOutputRunning),
+      "outputRunning": .bool(details.isOutputRunning),
+    ]
+  }
+
   private func tick() {
     let now = ProcessInfo.processInfo.systemUptime
     perform(follower.update(isRecording: probe.isRecording(at: now), at: now))
@@ -100,13 +112,16 @@ final class DictationDriver {
           ["key": .string(key.rawValue), "purpose": .string(purpose.rawValue)])
         onPress?("dictation")
       case .recording(let isRecording, let sincePress):
-        var fields: [String: LogValue] = ["recording": .bool(isRecording)]
+        var fields = probeFields()
+        fields["recording"] = .bool(isRecording)
         if let sincePress {
           fields["sincePressMs"] = .double((sincePress * 10_000).rounded() / 10)
         }
         log.log(.info, "input", "dictationRecording", nil, fields)
       case .listening(let isListening):
-        log.log(.info, "input", "dictationListening", nil, ["listening": .bool(isListening)])
+        var fields = probeFields()
+        fields["listening"] = .bool(isListening)
+        log.log(.info, "input", "dictationListening", nil, fields)
         onListeningChanged?(isListening)
       case .gaveUp(let purpose):
         log.log(
