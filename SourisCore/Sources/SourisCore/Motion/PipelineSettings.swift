@@ -20,14 +20,17 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     /// Overall multiplier on both gains, the "Speed" slider.
     public var speedScale: Double = 1
 
-    /// 1€ filter minimum cutoff in Hz. Lower is smoother at rest, laggier when slow.
-    public var filterMinCutoff: Double = 1.5
+    /// 1€ filter minimum cutoff in Hz. Lower is smoother at rest, laggier when slow. At 1.5 Hz the
+    /// filter added an estimated 65–105 ms of lag on slow moves; ARKit's rest wobble is under
+    /// 1 mm, quiet enough for 3 Hz.
+    public var filterMinCutoff: Double = 3
 
     /// 1€ filter speed coefficient, for positions in millimetres. Higher is less lag at speed.
     public var filterBeta: Double = 0.05
 
-    /// 1€ filter derivative cutoff in Hz.
-    public var filterDerivativeCutoff: Double = 1
+    /// 1€ filter derivative cutoff in Hz. It sets how fast the speed estimate, and so the cutoff,
+    /// ramps up at the start of a move.
+    public var filterDerivativeCutoff: Double = 3
 
     /// How far ahead of the camera, along the phone's long axis toward the top edge, the virtual
     /// sensor point sits, in metres. A longer reach makes a flat swivel move the cursor more.

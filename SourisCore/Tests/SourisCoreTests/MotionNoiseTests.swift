@@ -68,12 +68,13 @@ import simd
     // freeze sooner.
     #expect(Self.freezeEnd(steps, after: 2.5) > 2.6)
 
-    // At rest the gain's speed stays under slowSpeed, so the gain stays slow.
+    // At rest the gain's speed stays under slowSpeed, so the gain stays slow. The 3 Hz cutoffs let
+    // more of this 1 mm noise through than the phone's real sub-millimetre wobble would.
     let speeds = resting.map(\.diagnostics.speedMmPerSecond)
     let meanSpeed = speeds.reduce(0, +) / Double(speeds.count)
     let slow = settings.pointer.slowGain * settings.pointer.speedScale
     let meanGain = resting.map(\.diagnostics.gain).reduce(0, +) / Double(resting.count)
-    #expect(meanSpeed < settings.pointer.slowSpeed / 2, "mean speed \(meanSpeed) mm/s")
+    #expect(meanSpeed < settings.pointer.slowSpeed * 0.75, "mean speed \(meanSpeed) mm/s")
     #expect(meanGain < slow * 1.02, "mean gain \(meanGain)")
     #expect(abs((steps.last?.diagnostics.jitterMm ?? 0) - 1.41) < 0.5)
   }
