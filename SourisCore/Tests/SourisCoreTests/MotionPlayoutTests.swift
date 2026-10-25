@@ -27,9 +27,10 @@ import Testing
   static func play(
     _ feed: Feed,
     pacing: PointerPacing,
+    limits: MotionPlayout.Limits = .forLink(.wifi),
     position: (Double) -> Double = { $0 * speed }
   ) -> (frames: [(time: Double, x: Double)], playout: MotionPlayout) {
-    var playout = MotionPlayout(pacing: pacing)
+    var playout = MotionPlayout(pacing: pacing, limits: limits)
     let samples = feed.samples.sorted { $0.arrival < $1.arrival }
     var next = 0
     var frames: [(Double, Double)] = []
@@ -42,8 +43,8 @@ import Testing
           arrival: sample.arrival)
         next += 1
       }
-      if let total = playout.frame(at: time) {
-        frames.append((time, total.x))
+      if let shown = playout.frame(at: time) {
+        frames.append((time, shown.cursor.x))
       }
     }
     return (frames, playout)
@@ -91,7 +92,8 @@ import Testing
     // ever keeps it (a sample spacing plus the most delay smoothing adds, which it may use for a
     // while after a stall).
     let caughtUp = frames.first { $0.time >= 1.2 }?.x ?? 0
-    let limit = (1.2 - 0.003 - 0.01 - MotionPlayout.maxSmoothingDelay) * Self.speed
+    let maxDelay = MotionPlayout.Limits.forLink(.wifi).maxSmoothingDelay
+    let limit = (1.2 - 0.003 - 0.01 - maxDelay) * Self.speed
     #expect(caughtUp >= limit, "\(caughtUp) vs \(limit) pt")
   }
 
@@ -123,8 +125,8 @@ import Testing
         playout.add(total: SIMD2(x, 0), phoneTime: sample.phoneTime, arrival: sample.arrival)
         next += 1
       }
-      if let total = playout.frame(at: time) {
-        frames.append((time, total.x))
+      if let shown = playout.frame(at: time) {
+        frames.append((time, shown.cursor.x))
       }
     }
     // By 30 ms after the motion starts the cursor is moving at full speed, not crawling through
@@ -140,8 +142,8 @@ import Testing
     _ = playout.frame(at: 0.004)
     playout.add(total: SIMD2(10, 0), phoneTime: 0.01, arrival: 0.013)
     playout.add(total: SIMD2(20, 0), phoneTime: 0.02, arrival: 0.023)
-    #expect(playout.flush() == SIMD2(20, 0))
-    #expect(playout.frame(at: 0.024) == SIMD2(20, 0))
+    #expect(playout.flush()?.cursor == SIMD2(20, 0))
+    #expect(playout.frame(at: 0.024)?.cursor == SIMD2(20, 0))
   }
 
   @Test func resetForgetsEverything() {
@@ -149,6 +151,145 @@ import Testing
     playout.add(total: SIMD2(5, 5), phoneTime: 1, arrival: 1.01)
     playout.reset()
     #expect(playout.frame(at: 2) == nil)
-    #expect(playout.newestTotal == nil)
+    #expect(playout.newest == nil)
+  }
+
+  @Test func autoIsResponsiveOnTheCableAndSmoothElsewhere() {
+    #expect(PointerPacing.auto.resolved(for: .usb) == .responsive)
+    #expect(PointerPacing.auto.resolved(for: .bluetooth) == .smooth)
+    #expect(PointerPacing.auto.resolved(for: .wifi) == .smooth)
+    #expect(PointerPacing.smooth.resolved(for: .usb) == .smooth)
+    #expect(PointerPacing.immediate.resolved(for: .bluetooth) == .immediate)
+  }
+
+  /// Bluetooth-like delivery: samples every 10 ms, each held until the next 30 ms connection
+  /// event, and every tenth event missed.
+  static func bluetoothFeed() -> Feed {
+    var feed = Feed()
+    feed.delay = { time in
+      let event = (time / 0.03).rounded(.up)
+      let next = Int(event) % 10 == 0 ? event + 1 : event
+      return next * 0.03 - time
+    }
+    return feed
+  }
+
+  @Test func bluetoothMayDelayMoreThanWiFi() {
+    let (_, bluetooth) = Self.play(
+      Self.bluetoothFeed(), pacing: .smooth, limits: .forLink(.bluetooth))
+    let (_, wifi) = Self.play(Self.bluetoothFeed(), pacing: .smooth, limits: .forLink(.wifi))
+    #expect(wifi.targetDelay <= 0.03 + 1e-9)
+    #expect(bluetooth.targetDelay > 0.03, "delay \(bluetooth.targetDelay)")
+    #expect(bluetooth.targetDelay <= 0.08 + 1e-9)
+  }
+
+  @Test func coastingKeepsTheCursorMovingThroughAMissedEvent() {
+    var limits = MotionPlayout.Limits.forLink(.bluetooth)
+    // A delay too short for the missed events, so the playhead runs out at each one.
+    limits.maxSmoothingDelay = 0.035
+    let coasting = Self.play(Self.bluetoothFeed(), pacing: .smooth, limits: limits)
+    limits.maxCoast = 0
+    let holding = Self.play(Self.bluetoothFeed(), pacing: .smooth, limits: limits)
+    let normal = Self.speed / 120
+    func stalls(_ frames: [(time: Double, x: Double)]) -> Int {
+      Self.steps(frames, from: 0.3, to: 1.8).filter { $0 < normal * 0.3 }.count
+    }
+    #expect(coasting.playout.stats.coastFrames > 0)
+    #expect(stalls(coasting.frames) < stalls(holding.frames), "\(stalls(coasting.frames))")
+    // Never runs backwards while the hand moves steadily.
+    #expect(Self.steps(coasting.frames, from: 0.3, to: 1.8).allSatisfy { $0 > -0.01 })
+  }
+
+  @Test func aCoastPastAStopSettlesBackWhereThePhoneStopped() {
+    // Moving at 600 pt/s until 1 s, then still: the phone sends nothing more.
+    var feed = Feed()
+    feed.duration = 1
+    let (frames, _) = Self.play(feed, pacing: .smooth, limits: .forLink(.bluetooth))
+    let stop = Self.speed * 1
+    let overshoot = (frames.map(\.x).max() ?? 0) - stop
+    // At most the speed times the damping time.
+    #expect(overshoot <= Self.speed * MotionPlayout.coastDamping + 0.5, "\(overshoot) pt")
+    #expect(abs((frames.last?.x ?? 0) - stop) < 0.05)
+  }
+
+  @Test func theCableNeverCoasts() {
+    let (_, playout) = Self.play(
+      Self.bluetoothFeed(), pacing: .smooth, limits: .forLink(.usb))
+    #expect(playout.stats.coastFrames == 0)
+  }
+
+  @Test func relinkMeasuresTheNewLinkAfresh() {
+    // 3 ms trips, then a link whose trips are 40 ms: without relinking, every packet looks 37 ms
+    // late and the delay sits at its cap.
+    var playout = MotionPlayout(pacing: .smooth, limits: .forLink(.bluetooth))
+    var time = 0.0
+    while time < 1 {
+      playout.add(total: SIMD2(time * 600, 0), phoneTime: time, arrival: time + 0.003)
+      time += 0.01
+    }
+    playout.relink()
+    while time < 2 {
+      playout.add(total: SIMD2(time * 600, 0), phoneTime: time, arrival: time + 0.04)
+      time += 0.01
+    }
+    #expect(playout.targetDelay < 0.015, "delay \(playout.targetDelay)")
+  }
+
+  @Test func scrollingIsInterpolatedLikeTheCursor() {
+    // 1000 px/s of scrolling in 100 Hz samples: on a 120 Hz display every frame scrolls 8.3 px.
+    let (frames, _) = Self.play(Feed(), pacing: .smooth, position: { _ in 0 })
+    #expect(frames.allSatisfy { $0.x == 0 })
+    var playout = MotionPlayout(pacing: .smooth)
+    var scrolled: [Double] = []
+    var next = 0.0
+    for frame in 0...240 {
+      let time = Double(frame) / 120
+      while next + 0.003 <= time {
+        playout.add(
+          total: .zero, scroll: SIMD2(0, next * 1000), phoneTime: next, arrival: next + 0.003)
+        next += 0.01
+      }
+      if let shown = playout.frame(at: time), time > 0.3 {
+        scrolled.append(shown.scroll.y)
+      }
+    }
+    let steps = zip(scrolled, scrolled.dropFirst()).map { $1 - $0 }
+    #expect(steps.allSatisfy { abs($0 - 1000.0 / 120) < 0.1 }, "steps \(steps)")
+  }
+}
+
+@Suite struct PacedScrollTests {
+  @Test func aGestureIsBracketedByBeganAndEndedOnceShown() {
+    var scroll = PacedScroll()
+    scroll.receive([ScrollEvent(phase: .began, delta: SIMD2(0, 10))])
+    scroll.receive([ScrollEvent(phase: .changed, delta: SIMD2(0, 10))])
+    scroll.receive([ScrollEvent(phase: .ended, delta: .zero)])
+    #expect(scroll.show(SIMD2(0, 5)) == [ScrollEvent(phase: .began, delta: SIMD2(0, 5))])
+    // Ended only once everything received is shown.
+    #expect(scroll.show(SIMD2(0, 12)) == [ScrollEvent(phase: .changed, delta: SIMD2(0, 7))])
+    #expect(
+      scroll.show(SIMD2(0, 20)) == [
+        ScrollEvent(phase: .changed, delta: SIMD2(0, 8)),
+        ScrollEvent(phase: .ended, delta: .zero),
+      ])
+    #expect(scroll.show(SIMD2(0, 20)).isEmpty)
+  }
+
+  @Test func aGestureThatBeginsDuringThePlayoutContinuesTheLastOne() {
+    var scroll = PacedScroll()
+    scroll.receive([ScrollEvent(phase: .began, delta: SIMD2(0, 10))])
+    scroll.receive([ScrollEvent(phase: .ended, delta: .zero)])
+    _ = scroll.show(SIMD2(0, 4))
+    scroll.receive([ScrollEvent(phase: .began, delta: SIMD2(0, 10))])
+    #expect(scroll.show(SIMD2(0, 20)) == [ScrollEvent(phase: .changed, delta: SIMD2(0, 16))])
+  }
+
+  @Test func cancelEndsAnOpenGestureAndStartsOver() {
+    var scroll = PacedScroll()
+    scroll.receive([ScrollEvent(phase: .began, delta: SIMD2(0, 10))])
+    _ = scroll.show(SIMD2(0, 4))
+    #expect(scroll.cancel() == [ScrollEvent(phase: .ended, delta: .zero)])
+    #expect(scroll.received == .zero)
+    #expect(scroll.cancel().isEmpty)
   }
 }

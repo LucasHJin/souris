@@ -64,13 +64,18 @@ final class InputController: @unchecked Sendable {
   private var windowStats = PacketStats()
   private var windowCounters = PostCounters()
 
-  /// Paces cursor motion onto the display's refreshes (see `MotionPlayout`).
+  /// Paces cursor motion and scrolling onto the display's refreshes (see `MotionPlayout`).
   private var playout: MotionPlayout
+
+  /// The pacing chosen in the menu; `playout.pacing` is it resolved for `transport`.
+  private var preferredPacing: PointerPacing
+  private var transport = LinkTransport.wifi
 
   /// Cumulative cursor motion received from the phone and posted, points. Their difference is
   /// what the playout still holds.
   private var receivedTotal = SIMD2<Double>.zero
   private var postedTotal = SIMD2<Double>.zero
+  private var pacedScroll = PacedScroll()
 
   init(
     clickInterval: TimeInterval,
@@ -79,7 +84,8 @@ final class InputController: @unchecked Sendable {
     log: MacLog
   ) {
     poster = EventPoster(clickInterval: clickInterval, displayLayout: displayLayout)
-    playout = MotionPlayout(pacing: pacing)
+    preferredPacing = pacing
+    playout = MotionPlayout(pacing: pacing.resolved(for: .wifi), limits: .forLink(.wifi))
     self.log = log
   }
 
@@ -139,21 +145,33 @@ final class InputController: @unchecked Sendable {
     }
   }
 
-  /// Shows one display refresh's worth of cursor motion. Call from the display link; it hops
-  /// onto the queue.
+  /// Shows one display refresh's worth of cursor motion and scrolling. Call from the display
+  /// link; it hops onto the queue.
   func displayFrame() {
     queue.async { [self] in
       guard playout.pacing != .immediate else { return }
-      moveCursor(to: playout.frame(at: ProcessInfo.processInfo.systemUptime))
+      show(playout.frame(at: ProcessInfo.processInfo.systemUptime))
     }
   }
 
   /// Changes how motion is paced. Whatever the playout still holds is posted first.
   func setPacing(_ pacing: PointerPacing) {
     queue.async { [self] in
-      guard pacing != playout.pacing else { return }
-      moveCursor(to: playout.flush())
-      playout.pacing = pacing
+      preferredPacing = pacing
+      applyPacing()
+    }
+  }
+
+  /// Tells the playout what carries the packets now, which `.auto` pacing and the playout's
+  /// limits depend on. The new link's trip times are measured afresh.
+  func setTransport(_ transport: LinkTransport) {
+    queue.async { [self] in
+      guard transport != self.transport else { return }
+      self.transport = transport
+      playout.limits = .forLink(transport)
+      playout.relink()
+      fastestDelay = nil
+      applyPacing()
     }
   }
 
@@ -169,6 +187,15 @@ final class InputController: @unchecked Sendable {
 
   // MARK: - Private
 
+  /// Resolves the preferred pacing for the current link and switches the playout to it, posting
+  /// whatever it still holds first.
+  private func applyPacing() {
+    let pacing = preferredPacing.resolved(for: transport)
+    guard pacing != playout.pacing else { return }
+    show(playout.flush())
+    playout.pacing = pacing
+  }
+
   /// Posts the releases for anything held and forgets the cursor position. The next packet from
   /// the phone starts a fresh baseline.
   private func releaseEverything() {
@@ -178,14 +205,20 @@ final class InputController: @unchecked Sendable {
         .info, "input", "releaseAll", "Released what the phone held",
         ["buttons": .int(releases.buttonChanges.count), "scrolls": .int(releases.scrollEvents.count)])
     }
-    poster.post(releases)
+    let scrollEnd = pacedScroll.cancel()
+    if playout.pacing == .immediate {
+      poster.post(releases)
+    } else {
+      // What the playout still holds is dropped, so only the gesture's end is posted.
+      poster.post(InputUpdate(buttonChanges: releases.buttonChanges, scrollEvents: scrollEnd))
+    }
     poster.reset()
     playout.reset()
     receivedTotal = .zero
     postedTotal = .zero
   }
 
-  /// Posts an update: buttons and scrolling at once, and the motion either at once or through
+  /// Posts an update: buttons at once, and the motion and scrolling either at once or through
   /// the playout.
   private func post(_ update: InputUpdate, phoneTime: TimeInterval) {
     guard playout.pacing != .immediate else {
@@ -193,27 +226,27 @@ final class InputController: @unchecked Sendable {
       return
     }
     receivedTotal += update.cursorDelta
+    pacedScroll.receive(update.scrollEvents)
     playout.add(
-      total: receivedTotal, phoneTime: phoneTime, arrival: ProcessInfo.processInfo.systemUptime)
+      total: receivedTotal, scroll: pacedScroll.received, phoneTime: phoneTime,
+      arrival: ProcessInfo.processInfo.systemUptime)
     if !update.buttonChanges.isEmpty {
       // A press or release lands where the phone says the cursor is, so the held motion goes
       // first. The click freeze keeps the hand still around taps, so this is rarely more than a
       // few points.
-      moveCursor(to: playout.flush())
-    }
-    if !update.buttonChanges.isEmpty || !update.scrollEvents.isEmpty {
-      poster.post(
-        InputUpdate(buttonChanges: update.buttonChanges, scrollEvents: update.scrollEvents))
+      show(playout.flush())
+      poster.post(InputUpdate(buttonChanges: update.buttonChanges))
     }
   }
 
-  /// Posts the motion from what has been posted so far to `total`.
-  private func moveCursor(to total: SIMD2<Double>?) {
-    guard let total else { return }
-    let delta = total - postedTotal
-    postedTotal = total
-    if delta != .zero {
-      poster.post(InputUpdate(cursorDelta: delta))
+  /// Posts the motion and scrolling from what has been posted so far to `frame`.
+  private func show(_ frame: MotionPlayout.Frame?) {
+    guard let frame else { return }
+    let delta = frame.cursor - postedTotal
+    postedTotal = frame.cursor
+    let scrollEvents = pacedScroll.show(frame.scroll)
+    if delta != .zero || !scrollEvents.isEmpty {
+      poster.post(InputUpdate(cursorDelta: delta, scrollEvents: scrollEvents))
     }
   }
 
@@ -314,6 +347,7 @@ final class InputController: @unchecked Sendable {
       fields["resyncs"] = .int(resyncs)
     }
     fields["pacing"] = .string(playout.pacing.rawValue)
+    fields["transport"] = .string(transport.rawValue)
     if playout.pacing != .immediate {
       let paced = playout.takeStats()
       fields["paceDelayMs"] = .double((playout.targetDelay * 10_000).rounded() / 10)
@@ -323,6 +357,10 @@ final class InputController: @unchecked Sendable {
       }
       if paced.skipped > 0 {
         fields["skippedMs"] = .double((paced.skipped * 10_000).rounded() / 10)
+      }
+      if paced.coastFrames > 0 {
+        fields["coastFrames"] = .int(paced.coastFrames)
+        fields["coastMaxPt"] = .double((paced.maxCoastOffset * 10).rounded() / 10)
       }
     }
     let level: LogLevel = receive.maxGap > 0.15 || resyncs > 0 ? .warning : .debug

@@ -532,6 +532,7 @@ final class MacModel {
       isControllerOnBluetooth = onBluetooth
       log.log(
         .info, "app", "transport", nil, ["usb": .bool(onUSB), "bluetooth": .bool(onBluetooth)])
+      inputController.setTransport(onUSB ? .usb : onBluetooth ? .bluetooth : .wifi)
     }
 
     if isConnected {

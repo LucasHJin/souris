@@ -55,6 +55,7 @@ struct MenuContent: View {
           get: { model.pointerPacing },
           set: { model.setPointerPacing($0) })
       ) {
+        Text("Auto").tag(PointerPacing.auto)
         Text("Smooth").tag(PointerPacing.smooth)
         Text("Responsive").tag(PointerPacing.responsive)
         Text("Immediate").tag(PointerPacing.immediate)

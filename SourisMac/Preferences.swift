@@ -24,9 +24,9 @@ struct Preferences {
     nonmutating set { defaults.set(newValue, forKey: "usesBluetooth") }
   }
 
-  /// How the pointer's motion is paced. Smooth by default.
+  /// How the pointer's motion is paced. Auto by default.
   var pointerPacing: PointerPacing {
-    get { defaults.string(forKey: "pointerPacing").flatMap(PointerPacing.init) ?? .smooth }
+    get { defaults.string(forKey: "pointerPacing").flatMap(PointerPacing.init) ?? .auto }
     nonmutating set { defaults.set(newValue.rawValue, forKey: "pointerPacing") }
   }
 
