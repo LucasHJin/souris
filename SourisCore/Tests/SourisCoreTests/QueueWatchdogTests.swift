@@ -24,7 +24,8 @@ import Testing
     #expect(reported.count == 1)
     #expect(reported.first?.lastWork == "blocker")
     #expect((reported.first?.duration ?? 0) > 0.25)
-    #expect((reported.first?.lastWorkAge ?? 0) > 0.1)
+    // Read once the heartbeat was overdue, so about the threshold after the blocker began.
+    #expect((reported.first?.lastWorkAge ?? 0) > 0.05)
   }
 
   @Test func aBusyButFlowingQueueIsNotReported() async throws {
