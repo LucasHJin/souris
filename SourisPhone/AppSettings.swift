@@ -17,8 +17,8 @@ struct AppSettings: Codable, Equatable, Sendable {
   var touch = TouchSettings()
   var hapticsEnabled = true
 
-  /// On while tuning, so the numbers are always in view.
-  var showsDebugOverlay = true
+  /// Off unless tuning, so the bottom of the screen shows only the connection and tracking status.
+  var showsDebugOverlay = false
   var autoFocus = true
 
   /// The Mac picked from the Bonjour list. `nil` takes the first one found.
@@ -37,6 +37,24 @@ struct AppSettings: Codable, Equatable, Sendable {
   /// Bluetooth at the cost of a slower fall back to Wi-Fi. Off until the logs show it helps.
   var pausesPeerToPeerOnBluetooth = false
 
+  private enum CodingKeys: String, CodingKey {
+    case pipeline
+    case touch
+    case hapticsEnabled
+
+    /// Saved under a name of its own, not the property's, so phones that saved the overlay
+    /// shown while it was on by default start with it hidden.
+    case showsDebugOverlay = "debugOverlay"
+
+    case autoFocus
+    case macName
+    case manualAddress
+    case includesPeerToPeer
+    case usesVoiceServiceClass
+    case usesBluetooth
+    case pausesPeerToPeerOnBluetooth
+  }
+
   init() {}
 
   /// Decodes field by field, keeping every field that still reads and defaulting the rest, so
@@ -46,7 +64,7 @@ struct AppSettings: Codable, Equatable, Sendable {
     pipeline = container.value(.pipeline, default: PipelineSettings())
     touch = container.value(.touch, default: TouchSettings())
     hapticsEnabled = container.value(.hapticsEnabled, default: true)
-    showsDebugOverlay = container.value(.showsDebugOverlay, default: true)
+    showsDebugOverlay = container.value(.showsDebugOverlay, default: false)
     autoFocus = container.value(.autoFocus, default: true)
     macName = try? container.decodeIfPresent(String.self, forKey: .macName)
     manualAddress = container.value(.manualAddress, default: "")
