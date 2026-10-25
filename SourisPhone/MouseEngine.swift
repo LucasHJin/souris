@@ -53,6 +53,9 @@ final class MouseEngine: @unchecked Sendable {
   private var recordingID: UInt32 = 0
   private var snapshotTimer: (any DispatchSourceTimer)?
 
+  /// Logs a stall when `queue` stops running, with the work it last started.
+  private var watchdog: QueueWatchdog?
+
   // The previous `stats` entry's readings, for per-window differences.
   private var snapshotTicks = 0
   private var statsBaseline: PipelineDiagnostics?
@@ -87,6 +90,9 @@ final class MouseEngine: @unchecked Sendable {
       }
     }
     startSnapshotTimer()
+    watchdog = QueueWatchdog(queue: queue) { [weak self] stall in
+      self?.logStall(stall)
+    }
     queue.async { [self] in
       logLaunch(pipelineSettings: pipelineSettings)
     }
@@ -125,6 +131,7 @@ final class MouseEngine: @unchecked Sendable {
   /// Forwards a batch from the touch classifier, in order.
   func handle(touchEvents: [TouchEvent]) {
     queue.async { [self] in
+      watchdog?.note("touch")
       for event in touchEvents {
         recorder?.record(.touch(event))
         pipeline.handle(event)
@@ -142,6 +149,7 @@ final class MouseEngine: @unchecked Sendable {
   /// Forwards one volume-button press.
   func handle(scrollPress press: ScrollButtonPress) {
     queue.async { [self] in
+      watchdog?.note("volume")
       recorder?.record(.scrollPress(press))
       pipeline.handle(press)
       if isPipelinePaused {
@@ -155,6 +163,7 @@ final class MouseEngine: @unchecked Sendable {
   /// While the settings sheet is open the pipeline is paused but the client stays connected.
   func setSettingsOpen(_ isOpen: Bool) {
     queue.async { [self] in
+      watchdog?.note("settings")
       isSettingsOpen = isOpen
       logNow(.info, "app", isOpen ? "settingsOpened" : "settingsClosed")
       updatePause()
@@ -177,6 +186,7 @@ final class MouseEngine: @unchecked Sendable {
   /// Recreates the client when the network settings differ.
   func update(network newNetwork: NetworkSettings) {
     queue.async { [self] in
+      watchdog?.note("network")
       guard newNetwork != network else { return }
       network = newNetwork
       logNow(.info, "settings", "network", fields: Self.fields(for: newNetwork))
@@ -232,6 +242,7 @@ final class MouseEngine: @unchecked Sendable {
 
   private func start() {
     guard !isRunning else { return }
+    watchdog?.note("activate")
     isRunning = true
     isSuspended = false
     cameraProblem = nil
@@ -268,6 +279,7 @@ final class MouseEngine: @unchecked Sendable {
 
   private func stop() {
     guard isRunning else { return }
+    watchdog?.note("deactivate")
     isRunning = false
     isSuspended = true
     logNow(.info, "app", "deactivate")
@@ -327,6 +339,7 @@ final class MouseEngine: @unchecked Sendable {
       let bridge = BluetoothPeripheralBridge { [weak self] event in
         guard let self else { return }
         queue.async { [self] in
+          watchdog?.note("bluetooth")
           switch event {
           case .log(let entry):
             logOutbox.enqueue(.log(entry))
@@ -356,6 +369,7 @@ final class MouseEngine: @unchecked Sendable {
   // MARK: - Inputs (on queue)
 
   private func receive(_ sample: ARSample) {
+    watchdog?.note("arFrame")
     if cameraProblem != nil {
       cameraProblem = nil
     }
@@ -366,6 +380,7 @@ final class MouseEngine: @unchecked Sendable {
   }
 
   private func receive(_ sample: IMUSample) {
+    watchdog?.note("imu")
     recorder?.record(.imu(sample))
     pipeline.process(sample)
     drainPipelineEvents()
@@ -373,6 +388,7 @@ final class MouseEngine: @unchecked Sendable {
   }
 
   private func receive(_ event: ARTracker.Event) {
+    watchdog?.note("arEvent")
     switch event {
     case .interrupted:
       isCameraInterrupted = true
@@ -412,6 +428,18 @@ final class MouseEngine: @unchecked Sendable {
       .log(
         LogEntry(
           level: level, category: category, event: event, message: message, fields: fields)))
+  }
+
+  /// The watchdog's report of a stall, logged once the queue runs again.
+  private func logStall(_ stall: QueueWatchdog.Stall) {
+    logNow(
+      .warning, "app", "stall", "The pipeline queue was blocked",
+      fields: [
+        "ms": .double((stall.duration * 1000).rounded()),
+        "lastWork": .string(stall.lastWork),
+        "lastWorkAgeMs": .double((stall.lastWorkAge * 1000).rounded()),
+        "arDelayMs": .double(pipeline.diagnostics.arDelayMs.rounded(places: 1)),
+      ])
   }
 
   private func drainPipelineEvents() {
@@ -612,6 +640,7 @@ final class MouseEngine: @unchecked Sendable {
   }
 
   private func snapshotTick() {
+    watchdog?.note("snapshot")
     publishSnapshot()
     snapshotTicks += 1
     if isRunning && snapshotTicks % Self.statsEveryTicks == 0 {

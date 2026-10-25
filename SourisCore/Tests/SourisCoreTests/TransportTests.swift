@@ -1440,6 +1440,36 @@ struct TransportTests {
     #expect(again.received.values.isEmpty)
   }
 
+  @Test func aStallOnThePhoneIsNotBlamedOnTheLink() async throws {
+    let phone = UUID()
+    let server = TestServer(approved: [phone])
+    let port = try await server.start()
+    let bluetoothPort = UInt16.random(in: 50_000...59_000)
+    let outbox = TestOutbox()
+    let client = TestClient(port: port, deviceID: phone, outbox: outbox) { configuration in
+      configuration.listensForBluetooth = true
+      configuration.bluetoothPort = bluetoothPort
+      configuration.notRespondingTimeout = .milliseconds(400)
+      configuration.reconnectTimeout = .milliseconds(800)
+    }
+    defer {
+      client.client.stop()
+      server.server.stop()
+    }
+    client.client.start()
+    try await client.waitForStatus(.connected(macName: macName))
+    let bluetooth = FakeUSBMac(port: bluetoothPort)
+    defer { bluetooth.cancel() }
+    try await waitUntil("the link on Bluetooth") { client.client.stats.transport == .bluetooth }
+
+    // Block the client's queue for longer than the reconnect timeout.
+    outbox.queue.async { Thread.sleep(forTimeInterval: 1.2) }
+    try await Task.sleep(for: .milliseconds(1300))
+    try await expectNever("falling back to Wi-Fi", for: .milliseconds(300)) {
+      client.client.stats.transport != .bluetooth
+    }
+  }
+
   @Test func withoutListensForUSBNothingListens() async throws {
     let server = TestServer(approved: [])
     let port = try await server.start()

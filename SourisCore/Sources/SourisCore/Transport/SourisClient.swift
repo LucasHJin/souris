@@ -92,6 +92,9 @@ public enum LinkTransport: String, Sendable {
 ///   replaces Wi-Fi but never the cable: while the cable carries the link, a Bluetooth connection
 ///   is turned away (the bridge tries again), and so it is for 30 s after Bluetooth went silent.
 ///   Log packets over Bluetooth are held to `bluetoothLogBytesPerSecond`.
+/// - Silence the client itself caused doesn't count against the Mac: after `tick()` was held up
+///   for longer than `stallThreshold` (the phone's queue was blocked), the silence clock starts
+///   over instead of dropping the link.
 /// - Wi-Fi connections never use a wired interface: the only one a phone has is the cable's
 ///   network link, which the USB link already covers and which vanishes the moment the cable is
 ///   pulled.
@@ -192,6 +195,10 @@ public final class SourisClient: @unchecked Sendable {
   /// packets doesn't flap between Bluetooth and Wi-Fi every few seconds.
   private static let bluetoothHoldoff = Duration.seconds(30)
 
+  /// A tick this late means the client's queue was blocked, so whatever the Mac sent meanwhile
+  /// hasn't been read yet.
+  public static let stallThreshold = Duration.milliseconds(250)
+
   private let queue: DispatchQueue
   private let onStatus: @Sendable (ClientStatus) -> Void
   private let shared = Mutex(Shared())
@@ -247,6 +254,9 @@ public final class SourisClient: @unchecked Sendable {
   private var sideLink: SideLink?
   private var sideListeners: [SideLink: SideListener] = [:]
   private var bluetoothHoldoffUntil: ContinuousClock.Instant?
+
+  /// When `tick()` last ran.
+  private var lastTickAt: ContinuousClock.Instant?
 
   /// Bumped for every connection so late callbacks from an old one can be told apart.
   private var connectionToken = 0
@@ -406,6 +416,7 @@ public final class SourisClient: @unchecked Sendable {
       endpoints.removeAll()
       browsedNames.removeAll()
       retryAt = nil
+      lastTickAt = nil
       stopListener(for: .usb)
       stopListener(for: .bluetooth)
 
@@ -1066,6 +1077,15 @@ public final class SourisClient: @unchecked Sendable {
   private func tick() {
     guard isStarted else { return }
     let now = ContinuousClock.now
+    if let lastTickAt, now - lastTickAt > Self.stallThreshold {
+      // Whatever the Mac sent during the stall is still waiting to be read, so the silence says
+      // nothing about the link.
+      log(
+        .warning, "stalled", "The phone's queue was blocked",
+        fields: ["ms": .double((now - lastTickAt).milliseconds.rounded())])
+      lastHeard = now
+    }
+    lastTickAt = now
 
     for (side, state) in sideListeners {
       if let due = state.retryAt, now >= due {
