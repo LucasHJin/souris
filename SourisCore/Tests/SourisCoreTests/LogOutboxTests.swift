@@ -242,17 +242,22 @@ struct LogOutboxTests {
 
   @Test func rateLimiterLetsOneSendThroughAtATimeAndPaysBackLargeOnes() {
     var limiter = ByteRateLimiter(bytesPerSecond: 20_000, burst: 2400)
-    #expect(limiter.canSend(now: at(0)))
+    // `canSend` mutates (it banks the credit earned since the last call), so each answer is
+    // taken before `#expect` sees it.
+    func canSend(at milliseconds: Int) -> Bool {
+      limiter.canSend(now: at(milliseconds))
+    }
+    #expect(canSend(at: 0))
     limiter.charge(9000)
     // 6600 bytes in debt: paid back after 330 ms.
-    #expect(!limiter.canSend(now: at(300)))
-    #expect(limiter.canSend(now: at(331)))
+    #expect(!canSend(at: 300))
+    #expect(canSend(at: 331))
     limiter.charge(1200)
-    #expect(!limiter.canSend(now: at(380)))
+    #expect(!canSend(at: 380))
     // Credit stops at the burst however long the wait.
-    #expect(limiter.canSend(now: at(10_000)))
+    #expect(canSend(at: 10_000))
     limiter.charge(2400)
-    #expect(!limiter.canSend(now: at(10_000)))
+    #expect(!canSend(at: 10_000))
   }
 
   @Test func rewindResendsAtOnce() throws {
