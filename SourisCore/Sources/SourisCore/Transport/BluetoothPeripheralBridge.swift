@@ -34,8 +34,11 @@ public enum BluetoothPeripheralEvent: Sendable {
 ///   Bluetooth listener (`WireProtocol.bluetoothPort`, `StreamFraming`), which makes Bluetooth the
 ///   client's link unless the cable is up. A refused connection is retried every 2 s.
 /// - Packets from the client go out as outbox notifications through a `BluetoothSendQueue`, so the
-///   newest state replaces an older one that hasn't gone yet. Fragments the Mac writes are
-///   reassembled and handed to the client.
+///   newest state replaces an older one that hasn't gone yet. A `BluetoothPacer` spaces the
+///   notifications so iOS's transmit queue never fills, measuring the link from the round trips
+///   of the client's pings. While states keep coming, a log fragment goes ahead of the state at
+///   most every `largeFragmentSpacing`. Fragments the Mac writes are reassembled and handed to
+///   the client.
 /// - It asks for the shortest connection interval the Mac allows.
 ///
 /// Thread safety: every method may be called from any thread. Events arrive on `queue`.
@@ -46,6 +49,9 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
 
   /// Fragments of large packets allowed to wait; more is a backlog the log outbox will resend.
   private static let maxQueuedLargeFragments = 256
+
+  /// While the cursor moves, a log fragment may take a state's turn this often, seconds.
+  private static let largeFragmentSpacing: TimeInterval = 0.25
 
   private let queue: DispatchQueue
   private let clientPort: UInt16
@@ -61,6 +67,9 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
   private var client: NWConnection?
   private var clientGeneration = 0
   private var sendQueue = BluetoothSendQueue()
+  private var pacer = BluetoothPacer()
+  private var isSendScheduled = false
+  private var lastLargeSentAt: TimeInterval = 0
   private var reassembler = BluetoothReassembler()
 
   // Counts for the 1 Hz `link` entry.
@@ -68,6 +77,7 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
   private var notificationsRefused = 0
   private var packetsFromMac = 0
   private var droppedLargePackets = 0
+  private var roundTripsMs: [Double] = []
   private var nextSummaryAt = ContinuousClock.now
 
   public init(
@@ -215,18 +225,58 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
     pump()
   }
 
+  /// Sends the next fragment if the pacer allows it, and otherwise schedules a try for when it
+  /// will.
   private func pump() {
+    defer { logSummaryIfDue() }
     guard let manager, let outbox, let central else { return }
-    while let next = sendQueue.next {
-      guard manager.updateValue(next, for: outbox, onSubscribedCentrals: [central]) else {
-        // Bluetooth's queue is full; `peripheralManagerIsReady` calls back when there is room.
-        notificationsRefused += 1
-        break
+    let now = ProcessInfo.processInfo.systemUptime
+    guard pacer.canSend(at: now) else {
+      if !sendQueue.isEmpty {
+        schedulePump(at: pacer.nextSendTime)
       }
-      sendQueue.removeNext()
-      notificationsSent += 1
+      return
     }
-    logSummaryIfDue()
+    let largeFirst = now - lastLargeSentAt >= Self.largeFragmentSpacing
+    guard let (fragment, kind) = sendQueue.next(largeFirst: largeFirst) else { return }
+    guard manager.updateValue(fragment, for: outbox, onSubscribedCentrals: [central]) else {
+      // Bluetooth's queue is full; `peripheralManagerIsReady` calls back when there is room.
+      notificationsRefused += 1
+      pacer.didRefuse(at: now)
+      return
+    }
+    sendQueue.removeNext(kind)
+    pacer.didSend(at: now)
+    notificationsSent += 1
+    if kind == .large {
+      lastLargeSentAt = now
+    }
+    if !sendQueue.isEmpty {
+      schedulePump(at: pacer.nextSendTime)
+    }
+  }
+
+  private func schedulePump(at time: TimeInterval) {
+    guard !isSendScheduled else { return }
+    isSendScheduled = true
+    let delay = max(0, time - ProcessInfo.processInfo.systemUptime)
+    queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+      guard let self else { return }
+      isSendScheduled = false
+      pump()
+    }
+  }
+
+  /// Feeds the round trip of a pong from the Mac to the pacer.
+  private func measureRoundTrip(of packet: Data) {
+    guard BluetoothFraming.packetType(of: packet) == .pong,
+      case .pong(let pong) = try? Packet.decode(packet)
+    else { return }
+    let now = ProcessInfo.processInfo.systemUptime
+    let roundTrip = now - Double(pong.phoneTimeMicros) / 1_000_000
+    guard roundTrip >= 0, roundTrip < 5 else { return }
+    pacer.didMeasure(roundTrip: roundTrip, at: now)
+    roundTripsMs.append(roundTrip * 1000)
   }
 
   // MARK: - Helpers
@@ -239,9 +289,19 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
       "notifications": .int(notificationsSent),
       "queueFull": .int(notificationsRefused),
       "fromMac": .int(packetsFromMac),
+      "intervalMs": .double((pacer.interval * 10_000).rounded() / 10),
+      "waitingLarge": .int(sendQueue.largeFragmentCount),
     ]
     if droppedLargePackets > 0 {
       fields["droppedLarge"] = .int(droppedLargePackets)
+    }
+    if !roundTripsMs.isEmpty {
+      let sorted = roundTripsMs.sorted()
+      fields["rttP50Ms"] = .double((sorted[sorted.count / 2] * 10).rounded() / 10)
+      fields["rttMaxMs"] = .double(((sorted.last ?? 0) * 10).rounded() / 10)
+    }
+    if let baseline = pacer.baselineRoundTrip {
+      fields["rttBaselineMs"] = .double((baseline * 10_000).rounded() / 10)
     }
     if let central {
       fields["maxValue"] = .int(central.maximumUpdateValueLength)
@@ -251,6 +311,7 @@ public final class BluetoothPeripheralBridge: NSObject, @unchecked Sendable {
     notificationsRefused = 0
     packetsFromMac = 0
     droppedLargePackets = 0
+    roundTripsMs.removeAll()
   }
 
   private func setState(_ newState: BluetoothPeripheralState) {
@@ -328,6 +389,7 @@ extension BluetoothPeripheralBridge: CBPeripheralManagerDelegate {
     }
     self.central = central
     reassembler.reset()
+    pacer.reset()
     peripheral.setDesiredConnectionLatency(.low, for: central)
     log(
       .info, "macSubscribed",
@@ -365,6 +427,7 @@ extension BluetoothPeripheralBridge: CBPeripheralManagerDelegate {
       do {
         if let packet = try reassembler.append(value) {
           packetsFromMac += 1
+          measureRoundTrip(of: packet)
           client?.send(content: packet, completion: .idempotent)
         }
       } catch {

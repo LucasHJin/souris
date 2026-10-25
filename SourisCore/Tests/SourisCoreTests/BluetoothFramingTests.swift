@@ -55,23 +55,34 @@ import Testing
     #expect(BluetoothFraming.fragments(of: packet + Data([2]), maximumLength: 182).count == 2)
   }
 
-  @Test func theQueueKeepsOnlyTheNewestStateAndPutsItFirst() {
+  @Test func theQueueSendsSmallPacketsThenTheNewestStateThenLargeFragments() {
     var queue = BluetoothSendQueue()
     queue.enqueue(Data(repeating: 4, count: 400), maximumLength: 182)
     queue.enqueue(Self.ping, maximumLength: 182)
     queue.enqueue(Self.state(seq: 1), maximumLength: 182)
     queue.enqueue(Self.state(seq: 2), maximumLength: 182)
     var sent: [Data] = []
-    while let next = queue.next {
-      sent.append(next)
-      queue.removeNext()
+    while let (fragment, kind) = queue.next() {
+      sent.append(fragment)
+      queue.removeNext(kind)
     }
-    // The newest state, then the ping, then the three fragments of the large packet.
+    // The ping, then the newest state, then the three fragments of the large packet.
     #expect(sent.count == 5)
-    #expect(sent[0] == BluetoothFraming.fragments(of: Self.state(seq: 2), maximumLength: 182)[0])
-    #expect(sent[1].dropFirst() == Self.ping)
+    #expect(sent[0].dropFirst() == Self.ping)
+    #expect(sent[1] == BluetoothFraming.fragments(of: Self.state(seq: 2), maximumLength: 182)[0])
     #expect(sent[2...].allSatisfy { $0.first! & BluetoothFraming.bulk != 0 })
     #expect(queue.isEmpty)
+  }
+
+  @Test func aLargeFragmentCanGoAheadOfTheState() {
+    var queue = BluetoothSendQueue()
+    queue.enqueue(Data(repeating: 4, count: 400), maximumLength: 182)
+    queue.enqueue(Self.state(seq: 1), maximumLength: 182)
+    #expect(queue.next()?.kind == .state)
+    #expect(queue.next(largeFirst: true)?.kind == .large)
+    queue.enqueue(Self.ping, maximumLength: 182)
+    // Never ahead of a small packet.
+    #expect(queue.next(largeFirst: true)?.kind == .small)
   }
 
   @Test func packetTypeReadsTheHeader() {

@@ -66,12 +66,20 @@ public final class BluetoothCentralBridge: NSObject, @unchecked Sendable {
   private var reassembler = BluetoothReassembler()
   private var writes: [Data] = []
 
+  /// Notifications closer together than this came in the same connection event.
+  private static let sameEventGap = Duration.milliseconds(4)
+
   // Counts for the 1 Hz `link` entry.
   private var packetsUp = 0
   private var writesSent = 0
   private var notificationGapMax: Duration = .zero
   private var lastNotification: ContinuousClock.Instant?
   private var nextSummaryAt = ContinuousClock.now
+
+  /// Gaps between the connection events notifications arrived in, milliseconds, and how many
+  /// notifications came in each.
+  private var eventGapsMs: [Double] = []
+  private var notificationsInEvents = 0
 
   public init(
     queue: DispatchQueue = DispatchQueue(label: "souris.bluetooth", qos: .userInteractive),
@@ -252,16 +260,26 @@ public final class BluetoothCentralBridge: NSObject, @unchecked Sendable {
   private func logSummaryIfDue(now: ContinuousClock.Instant) {
     guard now >= nextSummaryAt else { return }
     nextSummaryAt = now + Self.summaryInterval
-    log(
-      .debug, "link",
-      fields: [
-        "packetsUp": .int(packetsUp),
-        "writes": .int(writesSent),
-        "maxGapMs": .double((notificationGapMax.milliseconds * 10).rounded() / 10),
-      ])
+    var fields: [String: LogValue] = [
+      "packetsUp": .int(packetsUp),
+      "writes": .int(writesSent),
+      "maxGapMs": .double((notificationGapMax.milliseconds * 10).rounded() / 10),
+    ]
+    if !eventGapsMs.isEmpty {
+      // The shortest gaps between events are the connection interval; the median shows how
+      // often events go by with nothing in them.
+      let sorted = eventGapsMs.sorted()
+      fields["eventGapP10Ms"] = .double((sorted[sorted.count / 10] * 10).rounded() / 10)
+      fields["eventGapP50Ms"] = .double((sorted[sorted.count / 2] * 10).rounded() / 10)
+      let perEvent = Double(notificationsInEvents) / Double(sorted.count + 1)
+      fields["perEvent"] = .double((perEvent * 10).rounded() / 10)
+    }
+    log(.debug, "link", fields: fields)
     packetsUp = 0
     writesSent = 0
     notificationGapMax = .zero
+    eventGapsMs.removeAll()
+    notificationsInEvents = 0
   }
 
   private func setState(_ newState: BluetoothCentralState) {
@@ -380,9 +398,14 @@ extension BluetoothCentralBridge: CBPeripheralDelegate {
     else { return }
     let now = ContinuousClock.now
     if let lastNotification {
-      notificationGapMax = max(notificationGapMax, now - lastNotification)
+      let gap = now - lastNotification
+      notificationGapMax = max(notificationGapMax, gap)
+      if gap >= Self.sameEventGap {
+        eventGapsMs.append(gap.milliseconds)
+      }
     }
     lastNotification = now
+    notificationsInEvents += 1
     do {
       if let packet = try reassembler.append(value) {
         packetsUp += 1

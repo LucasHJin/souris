@@ -25,7 +25,8 @@ public enum BluetoothService {
 /// The header byte has two flags. `bulk` marks a fragment of a packet too large for one value;
 /// `continues` marks every bulk fragment but the packet's last. A packet that fits goes as one
 /// fragment without `bulk`, so it can be sent between the fragments of a large one (a log packet
-/// takes seven at the usual 182-byte size) and a state packet never waits behind a log packet.
+/// takes three at the 512-byte size iOS and macOS agree on) and a state packet never waits behind
+/// a whole log packet.
 /// Bluetooth delivers notifications and writes in order and without loss, so no sequence numbers
 /// are needed.
 public enum BluetoothFraming {
@@ -100,9 +101,18 @@ public struct BluetoothReassembler: Sendable {
 /// The phone's outgoing packets while Bluetooth can't take them all.
 ///
 /// The newest state packet replaces any older one still waiting, as state is absolute and the Mac
-/// only wants the latest. Other small packets wait their turn in order, ahead of the fragments of
-/// large ones, so pings and hellos aren't held up by a log packet.
+/// only wants the latest. Other small packets (pings, hellos) go first, in order: they are rare,
+/// and behind a state that is replaced faster than the link sends they would never go. Large
+/// packets' fragments go last, unless the caller asks for one first so logs still trickle out
+/// while the cursor moves.
 public struct BluetoothSendQueue: Sendable {
+  /// Which part of the queue a fragment comes from.
+  public enum Kind: Sendable {
+    case small
+    case state
+    case large
+  }
+
   private var state: Data?
   private var small: [Data] = []
   private var large: [Data] = []
@@ -131,18 +141,28 @@ public struct BluetoothSendQueue: Sendable {
   }
 
   /// The next fragment to send, without removing it.
-  public var next: Data? {
-    state ?? small.first ?? large.first
+  ///
+  /// - Parameter largeFirst: Put a waiting large fragment ahead of a waiting state.
+  public func next(largeFirst: Bool = false) -> (fragment: Data, kind: Kind)? {
+    if let fragment = small.first { return (fragment, .small) }
+    if largeFirst, let fragment = large.first { return (fragment, .large) }
+    if let state { return (state, .state) }
+    return large.first.map { ($0, .large) }
   }
 
-  /// Removes the fragment `next` returned, once it was sent.
-  public mutating func removeNext() {
-    if state != nil {
+  /// Removes the fragment `next(largeFirst:)` returned, once it was sent.
+  public mutating func removeNext(_ kind: Kind) {
+    switch kind {
+    case .small:
+      if !small.isEmpty {
+        small.removeFirst()
+      }
+    case .state:
       state = nil
-    } else if !small.isEmpty {
-      small.removeFirst()
-    } else if !large.isEmpty {
-      large.removeFirst()
+    case .large:
+      if !large.isEmpty {
+        large.removeFirst()
+      }
     }
   }
 
