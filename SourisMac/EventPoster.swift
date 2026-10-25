@@ -79,11 +79,7 @@ final class EventPoster {
     let origin = movementOrigin(previous: previous, actual: actual, target: target, delta: delta)
 
     let (type, button) = moveType()
-    guard
-      let event = CGEvent(
-        mouseEventSource: source, mouseType: type, mouseCursorPosition: target,
-        mouseButton: button)
-    else { return }
+    guard let event = makeMouseEvent(type, at: target, button: button) else { return }
     // Synthesized events leave the delta fields at zero; apps that read them (games, some
     // canvases) would otherwise see a cursor that doesn't move.
     let delta = takeWholePoints(adding: SIMD2(target.x - origin.x, target.y - origin.y))
@@ -145,11 +141,9 @@ final class EventPoster {
     }
 
     guard
-      let event = CGEvent(
-        mouseEventSource: source,
-        mouseType: change.isDown ? button.downType : button.upType,
-        mouseCursorPosition: position,
-        mouseButton: button.coreGraphicsButton)
+      let event = makeMouseEvent(
+        change.isDown ? button.downType : button.upType, at: position,
+        button: button.coreGraphicsButton)
     else { return }
     event.setIntegerValueField(.mouseEventClickState, value: clickState)
     if button == .middle {
@@ -162,12 +156,23 @@ final class EventPoster {
   /// The modifier keys a click posted now would carry: those held on a keyboard, and any a posted
   /// key event left held. A held Control turns a left click into a context-menu click.
   func clickModifiers() -> CGEventFlags {
-    guard
-      let event = CGEvent(
-        mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: .zero,
-        mouseButton: .left)
-    else { return [] }
+    guard let event = makeMouseEvent(.leftMouseDown, at: .zero, button: .left) else { return [] }
     return event.flags.intersection(.modifierKeys)
+  }
+
+  /// A mouse event from `source`, which gives it the modifiers macOS takes as held, minus Fn.
+  ///
+  /// Fn does nothing on a click, a move or a scroll, and the 🎤 key leaves it held: its release
+  /// carries Fn, as a real one does, and nothing lifts it after. A lone Fn release might trigger
+  /// the 🌐 key's action instead.
+  private func makeMouseEvent(_ type: CGEventType, at position: CGPoint, button: CGMouseButton)
+    -> CGEvent?
+  {
+    let event = CGEvent(
+      mouseEventSource: source, mouseType: type, mouseCursorPosition: position,
+      mouseButton: button)
+    event?.flags.remove(.maskSecondaryFn)
+    return event
   }
 
   /// Where to press or release: the tracked fractional position, unless something else (the
@@ -206,6 +211,7 @@ final class EventPoster {
         scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
         wheel1: pixels.y, wheel2: pixels.x, wheel3: 0)
     else { return }
+    event.flags.remove(.maskSecondaryFn)  // See `makeMouseEvent`.
     event.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
     event.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
     event.setIntegerValueField(.scrollWheelEventMomentumPhase, value: 0)

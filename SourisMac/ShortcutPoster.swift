@@ -99,7 +99,8 @@ final class ShortcutPoster {
 
   /// Presses the 🎤 key, down and up back to back so it never reads as held. Both carry the Fn
   /// flag, as a real press's do: without it the release might not count as the key's, and the
-  /// press would then turn into a hold.
+  /// press would then turn into a hold. That leaves Fn held, so `EventPoster` drops it from its
+  /// events.
   func pressMicrophoneKey() {
     post(key: Self.microphoneKeyCode, isDown: true, flags: .maskSecondaryFn)
     post(key: Self.microphoneKeyCode, isDown: false, flags: .maskSecondaryFn)
