@@ -40,6 +40,12 @@ final class DictationDriver {
     follower.isListening
   }
 
+  /// Reads Dictation's state once, so the first hold doesn't wait the 80 ms the first read takes
+  /// while Core Audio connects.
+  func prepare() {
+    _ = probe.isRecording(at: ProcessInfo.processInfo.systemUptime)
+  }
+
   /// The phone started or stopped asking for Dictation.
   ///
   /// - Parameter linkDelayMs: How much longer than the session's fastest packet the one that

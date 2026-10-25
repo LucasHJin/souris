@@ -109,7 +109,10 @@ final class InputController: @unchecked Sendable {
 
   /// Uses `server` to tell the phone what the Mac is doing, such as Dictation listening.
   func attach(_ server: SourisServer) {
-    queue.async { [self] in self.server = server }
+    queue.async { [self] in
+      self.server = server
+      dictation.prepare()
+    }
   }
 
   /// The latest packet counters. Safe to call from any thread.
