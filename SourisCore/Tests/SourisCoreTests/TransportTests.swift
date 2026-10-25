@@ -1383,12 +1383,12 @@ struct TransportTests {
 
     client.client.start()
     try await client.waitForStatus(.connected(macName: macName))
-    #expect(!client.client.stats.isUSB)
+    #expect(client.client.stats.transport == .wifi)
 
     // The USB listener started with the client, so it is up by the time Wi-Fi has connected.
     let usbMac = FakeUSBMac(port: usbPort)
     try await client.waitForStatus(.connected(macName: FakeUSBMac.macName))
-    #expect(client.client.stats.isUSB)
+    #expect(client.client.stats.transport == .usb)
 
     client.send(cursorX: 42)
     try await waitUntil("a state over USB") {
@@ -1398,7 +1398,46 @@ struct TransportTests {
     // Back on Wi-Fi within a second, not after a retry delay or a fresh discovery.
     usbMac.cancel()
     try await client.waitForStatus(.connected(macName: macName), timeout: .seconds(1))
-    #expect(!client.client.stats.isUSB)
+    #expect(client.client.stats.transport == .wifi)
+  }
+
+  @Test func bluetoothReplacesWiFiButNeverTheCable() async throws {
+    let phone = UUID()
+    let server = TestServer(approved: [phone])
+    let port = try await server.start()
+    let usbPort = UInt16.random(in: 50_000...54_000)
+    let bluetoothPort = UInt16.random(in: 54_001...59_000)
+    let client = TestClient(port: port, deviceID: phone) { configuration in
+      configuration.listensForUSB = true
+      configuration.usbPort = usbPort
+      configuration.listensForBluetooth = true
+      configuration.bluetoothPort = bluetoothPort
+    }
+    defer {
+      client.client.stop()
+      server.server.stop()
+    }
+
+    client.client.start()
+    try await client.waitForStatus(.connected(macName: macName))
+
+    // The phone's Bluetooth bridge connects the same way the Mac's USB bridge does.
+    let bluetooth = FakeUSBMac(port: bluetoothPort)
+    defer { bluetooth.cancel() }
+    try await client.waitForStatus(.connected(macName: FakeUSBMac.macName))
+    try await waitUntil("the link on Bluetooth") { client.client.stats.transport == .bluetooth }
+
+    let usb = FakeUSBMac(port: usbPort)
+    defer { usb.cancel() }
+    try await waitUntil("the cable taking over") { client.client.stats.transport == .usb }
+
+    // A Bluetooth bridge that reconnects while the cable is up is turned away.
+    let again = FakeUSBMac(port: bluetoothPort)
+    defer { again.cancel() }
+    try await expectNever("Bluetooth replacing the cable", for: .milliseconds(500)) {
+      client.client.stats.transport != .usb
+    }
+    #expect(again.received.values.isEmpty)
   }
 
   @Test func withoutListensForUSBNothingListens() async throws {

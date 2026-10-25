@@ -1,6 +1,8 @@
 import Foundation
 import SwiftUI
 
+import SourisCore
+
 /// A compact monospaced block of live readouts for tuning.
 struct DebugOverlay: View {
   let snapshot: EngineSnapshot
@@ -45,7 +47,7 @@ enum DebugReadout {
       "RTT \(optionalNumber(link.rttMedianMs, 5, 1))/\(optionalNumber(link.rttMaxMs, 6, 1)) ms"
         + "  \(number(link.packetsPerSecond, 4, 0))/s"
         + "  loss \(number(link.pingLoss * 100, 3, 0))%"
-        + (link.isUSB ? "  USB" : "  Wi-Fi"),
+        + "  \(transportName(link.transport))",
       "cursor \(pad(diagnostics.cursorGate.rawValue, to: 18))"
         + " presses \(String(format: "%4ld", diagnostics.scrollPresses))",
       "thermal \(thermal)  jumps \(String(format: "%4ld", diagnostics.rejectedJumps))"
@@ -69,6 +71,14 @@ enum DebugReadout {
   private static func pad(_ text: String, to width: Int, leading: Bool = false) -> String {
     let padding = String(repeating: " ", count: max(0, width - text.count))
     return leading ? padding + text : text + padding
+  }
+
+  private static func transportName(_ transport: LinkTransport) -> String {
+    switch transport {
+    case .wifi: "Wi-Fi"
+    case .usb: "USB"
+    case .bluetooth: "BT"
+    }
   }
 
   private static func yesNo(_ value: Bool) -> String {

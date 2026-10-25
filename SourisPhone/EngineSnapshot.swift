@@ -24,6 +24,7 @@ struct VideoFormatInfo: Equatable, Sendable {
 struct EngineSnapshot: Equatable, Sendable {
   var clientStatus = ClientStatus.stopped
   var linkStats = LinkStats()
+  var bluetoothState = BluetoothPeripheralState.stopped
 
   /// The log queued for the Mac.
   var logStats = LogOutbox.Stats()

@@ -219,15 +219,37 @@ struct SettingsView: View {
 
   private var networkSection: some View {
     Section {
+      Toggle(isOn: $model.settings.usesBluetooth) {
+        VStack(alignment: .leading, spacing: 2) {
+          Text("Bluetooth")
+          if model.settings.usesBluetooth {
+            Text(bluetoothStatus)
+              .font(.footnote)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
       Toggle("Peer-to-peer Wi-Fi", isOn: $model.settings.includesPeerToPeer)
       Toggle("Wi-Fi voice priority", isOn: $model.settings.usesVoiceServiceClass)
     } header: {
       Text("Network")
     } footer: {
       Text(
-        "Peer-to-peer is only for networks that stop devices seeing each other. Also turn it on "
-          + "in the Mac menu. It adds latency. Voice priority sends packets in the Wi-Fi voice "
-          + "queue.")
+        "Without the cable, Bluetooth gives steadier timing than busy Wi-Fi; turn it off if "
+          + "Wi-Fi works better where you are. It needs Use Bluetooth on in the Mac menu too. "
+          + "Peer-to-peer is only for networks that stop devices seeing each other. Also turn it "
+          + "on in the Mac menu. It adds latency. Voice priority sends packets in the Wi-Fi "
+          + "voice queue.")
+    }
+  }
+
+  private var bluetoothStatus: String {
+    switch model.snapshot.bluetoothState {
+    case .stopped: "Off"
+    case .unavailable(let reason): "Unavailable: Bluetooth is \(reason)"
+    case .advertising: "Waiting for the Mac"
+    case .connected:
+      model.snapshot.linkStats.transport == .bluetooth ? "Carrying the link" : "Linked, standing by"
     }
   }
 

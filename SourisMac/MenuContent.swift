@@ -14,6 +14,9 @@ struct MenuContent: View {
     if let usb = model.usbDetail {
       Text(verbatim: usb)
     }
+    if let bluetooth = model.bluetoothDetail {
+      Text(verbatim: bluetooth)
+    }
 
     if model.pendingApproval != nil || !model.isAccessibilityGranted {
       Divider()
@@ -56,6 +59,11 @@ struct MenuContent: View {
         Text("Responsive").tag(PointerPacing.responsive)
         Text("Immediate").tag(PointerPacing.immediate)
       }
+      Toggle(
+        "Use Bluetooth",
+        isOn: Binding(
+          get: { model.usesBluetooth },
+          set: { model.setUsesBluetooth($0) }))
       Toggle(
         "Allow Peer-to-Peer Wi-Fi",
         isOn: Binding(
