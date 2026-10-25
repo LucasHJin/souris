@@ -52,6 +52,9 @@ public struct LinkStats: Equatable, Sendable {
   /// Log records the outbox dropped unsent because it was full.
   public var logRecordsDropped = 0
 
+  /// The link runs over the USB cable rather than Wi-Fi.
+  public var isUSB = false
+
   public init() {}
 }
 
@@ -72,6 +75,11 @@ public struct LinkStats: Equatable, Sendable {
 ///   the next `start()`, so reconnecting means `stop()` then `start()`.
 /// - If nothing comes back for 3 s (`notRespondingTimeout`) the status becomes `.notResponding`;
 ///   after 6 s (`reconnectTimeout`) the client reconnects, re-browsing when the target is Bonjour.
+/// - With `listensForUSB`, the client also listens on its loopback interface for the Mac's USB
+///   link (`WireProtocol.usbPort`, TCP framed by `StreamFraming`). When the Mac connects over the
+///   cable, that connection replaces the Wi-Fi one and Bonjour browsing stops. When it closes or
+///   goes silent, the client falls back to Wi-Fi at once. Log packets aren't rate limited over
+///   USB.
 /// - With a `LogOutbox`, the client logs its network events into it (category `"net"`) and, while
 ///   the latest welcome is `accepted` or `busy` and the Mac is responding, sends log packets one at
 ///   a time: a log packet goes only when no state packet is waiting or in flight, the previous log
@@ -112,6 +120,12 @@ public final class SourisClient: @unchecked Sendable {
     /// state packets leave room for. Wi-Fi stalls queue everything sent into them, so the log
     /// stream is kept small next to the state packets.
     public var logBytesPerSecond: Double? = 20_000
+
+    /// Listen on the loopback interface for the Mac's USB link, and prefer it while it's up.
+    public var listensForUSB = false
+
+    /// The loopback TCP port the USB link listens on.
+    public var usbPort: UInt16 = WireProtocol.usbPort
 
     public init(deviceID: UUID, deviceName: String) {
       self.deviceID = deviceID
@@ -165,6 +179,13 @@ public final class SourisClient: @unchecked Sendable {
   private var browsedNames: [String] = []
 
   private var connection: NWConnection?
+
+  /// The current connection is the Mac's USB link rather than one this client opened over Wi-Fi.
+  private var isOnUSB = false
+
+  private var usbListener: NWListener?
+  private var usbListenerGeneration = 0
+  private var usbListenerRetryAt: ContinuousClock.Instant?
 
   /// Bumped for every connection so late callbacks from an old one can be told apart.
   private var connectionToken = 0
@@ -234,6 +255,7 @@ public final class SourisClient: @unchecked Sendable {
   deinit {
     tickTimer?.cancel()
     browser?.cancel()
+    usbListener?.cancel()
     connection?.cancel()
   }
 
@@ -283,7 +305,11 @@ public final class SourisClient: @unchecked Sendable {
           "deviceName": .string(configuration.deviceName),
           "peerToPeer": .bool(configuration.includesPeerToPeer),
           "voiceServiceClass": .bool(configuration.usesVoiceServiceClass),
+          "listensForUSB": .bool(configuration.listensForUSB),
         ])
+      if configuration.listensForUSB {
+        startUSBListener()
+      }
 
       switch configuration.target {
       case .bonjour:
@@ -310,6 +336,7 @@ public final class SourisClient: @unchecked Sendable {
       endpoints.removeAll()
       browsedNames.removeAll()
       retryAt = nil
+      stopUSBListener()
 
       let wasReady = isConnectionReady
       if let old = detachConnection() {
@@ -414,7 +441,7 @@ public final class SourisClient: @unchecked Sendable {
 
   /// Opens a connection to the target if there isn't one and nothing is waiting to be retried.
   private func connectIfPossible() {
-    guard isStarted, connection == nil, retryAt == nil else { return }
+    guard isStarted, connection == nil, retryAt == nil, !isOnUSB else { return }
     switch configuration.target {
     case .host(let host, let port):
       guard let port = NWEndpoint.Port(rawValue: port), port != .any else {
@@ -444,9 +471,14 @@ public final class SourisClient: @unchecked Sendable {
   }
 
   private func open(_ endpoint: NWEndpoint) {
+    let connection = NWConnection(to: endpoint, using: makeParameters())
+    begin(connection, description: endpoint.debugDescription)
+  }
+
+  /// Makes `connection` the current one and starts it.
+  private func begin(_ connection: NWConnection, description: String) {
     connectionToken += 1
     let token = connectionToken
-    let connection = NWConnection(to: endpoint, using: makeParameters())
     connection.stateUpdateHandler = { [weak self] state in
       self?.connectionStateChanged(state, token: token)
     }
@@ -470,7 +502,7 @@ public final class SourisClient: @unchecked Sendable {
     monitor = LinkMonitor()
     publishStats()
     if status == .searching {
-      setStatus(.connecting, reason: "found \(endpoint.debugDescription)")
+      setStatus(.connecting, reason: "found \(description)")
     }
     connection.start(queue: queue)
   }
@@ -527,6 +559,10 @@ public final class SourisClient: @unchecked Sendable {
   }
 
   private func connectionFailed(_ status: ClientStatus, reason: String) {
+    if isOnUSB {
+      fallBackFromUSB(reason: reason)
+      return
+    }
     detachConnection()?.cancel()
     setStatus(status, reason: reason)
     retryAt = .now + Self.retryDelay
@@ -543,11 +579,16 @@ public final class SourisClient: @unchecked Sendable {
     isNotResponding = false
     isSendInFlight = false
     isLogSendInFlight = false
+    isOnUSB = false
     return old
   }
 
   /// Drops the connection and starts over: re-browses for a Bonjour target, reconnects to a host.
   private func reconnect(silence: Duration) {
+    if isOnUSB {
+      fallBackFromUSB(reason: "no reply over USB for \(Int(silence.milliseconds)) ms")
+      return
+    }
     log(
       .warning, "reconnect",
       fields: [
@@ -576,6 +617,111 @@ public final class SourisClient: @unchecked Sendable {
     queue.asyncAfter(deadline: .now() + Self.byeGracePeriod) { old.cancel() }
   }
 
+  // MARK: - USB
+
+  private func startUSBListener() {
+    usbListenerGeneration += 1
+    let generation = usbListenerGeneration
+    usbListenerRetryAt = nil
+    let tcp = NWProtocolTCP.Options()
+    tcp.noDelay = true
+    let parameters = NWParameters(tls: nil, tcp: tcp)
+    parameters.defaultProtocolStack.applicationProtocols.insert(LengthPrefixFramer.options, at: 0)
+    // usbmuxd on the phone connects to the app over loopback, so nothing on Wi-Fi can reach this.
+    parameters.requiredInterfaceType = .loopback
+    parameters.allowLocalEndpointReuse = true
+    let listener: NWListener
+    do {
+      guard let port = NWEndpoint.Port(rawValue: configuration.usbPort), port != .any else {
+        log(
+          .error, "usbListener", "Invalid USB port",
+          fields: ["port": .int(Int(configuration.usbPort))])
+        return
+      }
+      listener = try NWListener(using: parameters, on: port)
+    } catch {
+      var fields = (error as? NWError)?.logFields ?? ["error": .string(error.networkDescription)]
+      fields["port"] = .int(Int(configuration.usbPort))
+      log(.error, "usbListener", "Couldn’t listen for USB", fields: fields)
+      usbListenerRetryAt = .now + Self.retryDelay
+      return
+    }
+    listener.stateUpdateHandler = { [weak self] state in
+      self?.usbListenerStateChanged(state, generation: generation)
+    }
+    listener.newConnectionHandler = { [weak self] connection in
+      self?.acceptUSB(connection, generation: generation)
+    }
+    usbListener = listener
+    listener.start(queue: queue)
+  }
+
+  private func stopUSBListener() {
+    usbListenerGeneration += 1
+    usbListener?.cancel()
+    usbListener = nil
+    usbListenerRetryAt = nil
+  }
+
+  private func usbListenerStateChanged(_ state: NWListener.State, generation: Int) {
+    guard generation == usbListenerGeneration, isStarted else { return }
+    var fields = state.logFields
+    fields["port"] = .int(Int(configuration.usbPort))
+    switch state {
+    case .ready:
+      log(.info, "usbListener", fields: fields)
+    case .waiting:
+      log(.warning, "usbListener", fields: fields)
+    case .failed:
+      // Usually the port is still held by the previous client's listener; try again shortly.
+      log(.warning, "usbListener", fields: fields)
+      usbListener?.cancel()
+      usbListener = nil
+      usbListenerRetryAt = .now + Self.retryDelay
+    default:
+      log(.debug, "usbListener", fields: fields)
+    }
+  }
+
+  /// Switches to the Mac's USB link, dropping the Wi-Fi connection (or an older USB one).
+  private func acceptUSB(_ incoming: NWConnection, generation: Int) {
+    guard generation == usbListenerGeneration, isStarted else {
+      incoming.cancel()
+      return
+    }
+    log(
+      .info, "usbConnected", "The Mac connected over USB",
+      fields: [
+        "remote": .string(incoming.endpoint.debugDescription),
+        "replaced": .string(isOnUSB ? "usb" : connection == nil ? "none" : "wifi"),
+      ])
+    // No bye: the Mac keeps this phone as the controller and carries on over the new flow.
+    detachConnection()?.cancel()
+    browserToken += 1
+    browser?.cancel()
+    browser = nil
+    endpoints.removeAll()
+    retryAt = nil
+    isOnUSB = true
+    setStatus(.connecting, reason: "the Mac connected over USB")
+    begin(incoming, description: "USB")
+  }
+
+  /// Drops the USB link and goes back to Wi-Fi straight away.
+  private func fallBackFromUSB(reason: String) {
+    log(.warning, "usbDisconnected", "Falling back to Wi-Fi", fields: ["reason": .string(reason)])
+    detachConnection()?.cancel()
+    publishStats()
+    switch configuration.target {
+    case .bonjour:
+      setStatus(.searching, reason: "USB link closed: \(reason)")
+      startBrowser()
+    case .host:
+      setStatus(.connecting, reason: "USB link closed: \(reason)")
+      connectIfPossible()
+    }
+  }
+
   // MARK: - Receiving
 
   private func receive(token: Int) {
@@ -591,6 +737,11 @@ public final class SourisClient: @unchecked Sendable {
       log(.error, "receiveError", fields: error.logFields)
       connectionFailed(
         Self.failureStatus(for: error), reason: "receive failed: \(error.networkDescription)")
+      return
+    }
+    // A stream has no empty packets: nothing received means the Mac closed the USB link.
+    if isOnUSB && (data?.isEmpty ?? true) {
+      connectionFailed(.connecting, reason: "the Mac closed the USB link")
       return
     }
     if let data {
@@ -758,9 +909,12 @@ public final class SourisClient: @unchecked Sendable {
       isLogSendInFlight = false
     }
     guard !isLogSendInFlight, !isStatePending else { return }
-    if logBudget?.canSend(now: now) == false { return }
+    // The cable has room to spare; only Wi-Fi needs the log stream held back.
+    if !isOnUSB, logBudget?.canSend(now: now) == false { return }
     guard let datagram = logOutbox.nextDatagram(now: now) else { return }
-    logBudget?.charge(datagram.count)
+    if !isOnUSB {
+      logBudget?.charge(datagram.count)
+    }
     isLogSendInFlight = true
     lastLogSentAt = now
     let token = connectionToken
@@ -798,6 +952,9 @@ public final class SourisClient: @unchecked Sendable {
     guard isStarted else { return }
     let now = ContinuousClock.now
 
+    if let due = usbListenerRetryAt, now >= due {
+      startUSBListener()
+    }
     if let due = retryAt, now >= due {
       retryAt = nil
       if case .bonjour = configuration.target, browser == nil {
@@ -900,6 +1057,7 @@ public final class SourisClient: @unchecked Sendable {
 
   private func publishStats() {
     var snapshot = monitor.snapshot(nowMicros: Uptime.micros())
+    snapshot.isUSB = isOnUSB
     if let outboxStats = logOutbox?.stats {
       snapshot.logRecordsQueued = outboxStats.queuedRecords
       snapshot.logRecordsDropped = outboxStats.dropped
@@ -947,6 +1105,7 @@ public final class SourisClient: @unchecked Sendable {
       "statesSent": .int(summary.statesSent),
       "sendErrors": .int(summary.sendErrors),
       "welcome": .string(welcome.map { String(describing: $0.status) } ?? "none"),
+      "transport": .string(isOnUSB ? "usb" : "wifi"),
       "logQueued": .int(outbox.queuedRecords),
       "logQueuedBytes": .int(outbox.queuedBytes),
       "logAckedThrough": .int(Int(outbox.ackedThrough)),

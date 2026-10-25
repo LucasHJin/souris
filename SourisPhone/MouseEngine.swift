@@ -281,6 +281,8 @@ final class MouseEngine: @unchecked Sendable {
     configuration.target = network.target
     configuration.includesPeerToPeer = network.includesPeerToPeer
     configuration.usesVoiceServiceClass = network.usesVoiceServiceClass
+    // A Mac on the cable reaches the app through usbmuxd; Wi-Fi stays the fallback.
+    configuration.listensForUSB = true
 
     clientGeneration += 1
     let generation = clientGeneration

@@ -9,6 +9,9 @@ struct MenuContent: View {
     if let detail = model.statusDetail {
       Text(verbatim: detail)
     }
+    if let usb = model.usbDetail {
+      Text(verbatim: usb)
+    }
 
     if model.pendingApproval != nil || !model.isAccessibilityGranted {
       Divider()

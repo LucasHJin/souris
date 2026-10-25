@@ -38,7 +38,9 @@ extension EngineSnapshot {
     case .waitingForApproval(let mac):
       ConnectionLine(text: "Allow this iPhone on \(mac)", level: .caution)
     case .connected(let mac):
-      ConnectionLine(text: "Connected to \(mac)", level: .good)
+      ConnectionLine(
+        text: linkStats.isUSB ? "Connected to \(mac) over USB" : "Connected to \(mac)",
+        level: .good)
     case .denied(let mac):
       ConnectionLine(text: "\(mac) refused this iPhone", level: .problem)
     case .busy(let mac):

@@ -357,6 +357,45 @@ private final class LossyProxy: Sendable {
   }
 }
 
+/// A stand-in for the Mac's USB bridge: connects to the client's USB port over loopback TCP,
+/// with the same framing, and welcomes every hello as `usbMacName`.
+private final class FakeUSBMac: Sendable {
+  static let macName = "USB Mac"
+
+  let connection: NWConnection
+  let received = Recorder<Packet>()
+
+  init(port: UInt16) {
+    let parameters = NWParameters(tls: nil, tcp: NWProtocolTCP.Options())
+    parameters.defaultProtocolStack.applicationProtocols.insert(LengthPrefixFramer.options, at: 0)
+    connection = NWConnection(
+      host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port) ?? .any, using: parameters)
+    connection.start(queue: DispatchQueue(label: "test.usb-mac"))
+    receiveNext()
+  }
+
+  private func receiveNext() {
+    connection.receiveMessage { [self] data, _, _, error in
+      if let data, let packet = try? Packet.decode(data) {
+        received.append(packet)
+        if case .hello = packet {
+          let welcome = WelcomePacket(status: .accepted, macName: Self.macName)
+          connection.send(content: Packet.welcome(welcome).encoded(), completion: .idempotent)
+        }
+      }
+      if error == nil, !(data?.isEmpty ?? true) { receiveNext() }
+    }
+  }
+
+  var states: [StatePacket] {
+    received.values.compactMap { if case .state(let state) = $0 { state } else { nil } }
+  }
+
+  func cancel() {
+    connection.cancel()
+  }
+}
+
 /// A server on a free loopback port, with its events recorded.
 private final class TestServer: Sendable {
   let server: SourisServer
@@ -1324,5 +1363,57 @@ struct TransportTests {
       server.events.phoneEntries(category: "net").first { $0.event == "link" })
     #expect(link.fields["pingsSent"] != nil)
     #expect(link.fields["logQueued"] != nil)
+  }
+
+  // MARK: USB
+
+  @Test func aMacOnTheUSBPortTakesOverAndClosingItFallsBackToWiFi() async throws {
+    let phone = UUID()
+    let server = TestServer(approved: [phone])
+    let port = try await server.start()
+    let usbPort = UInt16.random(in: 50_000...59_000)
+    let client = TestClient(port: port, deviceID: phone) { configuration in
+      configuration.listensForUSB = true
+      configuration.usbPort = usbPort
+    }
+    defer {
+      client.client.stop()
+      server.server.stop()
+    }
+
+    client.client.start()
+    try await client.waitForStatus(.connected(macName: macName))
+    #expect(!client.client.stats.isUSB)
+
+    // The USB listener started with the client, so it is up by the time Wi-Fi has connected.
+    let usbMac = FakeUSBMac(port: usbPort)
+    try await client.waitForStatus(.connected(macName: FakeUSBMac.macName))
+    #expect(client.client.stats.isUSB)
+
+    client.send(cursorX: 42)
+    try await waitUntil("a state over USB") {
+      usbMac.states.contains { $0.state.cursor.x == 42 }
+    }
+
+    usbMac.cancel()
+    try await client.waitForStatus(.connected(macName: macName))
+    #expect(!client.client.stats.isUSB)
+  }
+
+  @Test func withoutListensForUSBNothingListens() async throws {
+    let server = TestServer(approved: [])
+    let port = try await server.start()
+    let usbPort = UInt16.random(in: 50_000...59_000)
+    let client = TestClient(port: port) { $0.usbPort = usbPort }
+    defer {
+      client.client.stop()
+      server.server.stop()
+    }
+    client.client.start()
+    let usbMac = FakeUSBMac(port: usbPort)
+    defer { usbMac.cancel() }
+    try await expectNever("a hello on the USB port", for: .milliseconds(500)) {
+      !usbMac.received.values.isEmpty
+    }
   }
 }

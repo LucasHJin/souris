@@ -41,7 +41,8 @@ enum DebugReadout {
         + "  frozen \(yesNo(diagnostics.isFrozen))",
       "RTT \(optionalNumber(link.rttMedianMs, 5, 1))/\(optionalNumber(link.rttMaxMs, 6, 1)) ms"
         + "  \(number(link.packetsPerSecond, 4, 0))/s"
-        + "  loss \(number(link.pingLoss * 100, 3, 0))%",
+        + "  loss \(number(link.pingLoss * 100, 3, 0))%"
+        + (link.isUSB ? "  USB" : "  Wi-Fi"),
       "cursor \(pad(diagnostics.cursorGate.rawValue, to: 18))"
         + " presses \(String(format: "%4ld", diagnostics.scrollPresses))",
       "thermal \(thermal)  jumps \(String(format: "%4ld", diagnostics.rejectedJumps))"

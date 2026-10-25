@@ -32,6 +32,10 @@ final class MacModel {
   private(set) var approvedDeviceIDs: Set<UUID>
   private(set) var acceptsConnections: Bool
   private(set) var allowsPeerToPeer: Bool
+  private(set) var usbState = USBBridgeState.stopped
+
+  /// The controlling phone's packets are coming over the USB cable.
+  private(set) var isControllerOnUSB = false
 
   /// Phones waiting for an answer. The first one is the one the alert is about.
   private var approvalQueue: [PeerInfo] = []
@@ -44,6 +48,7 @@ final class MacModel {
   @ObservationIgnored private let displayLayout: DisplayLayout
   @ObservationIgnored private let inputController: InputController
   @ObservationIgnored private var server: SourisServer?
+  @ObservationIgnored private var usbBridge: USBBridge?
 
   /// Bumped whenever a server is started or stopped, so late reports from an old one are ignored.
   @ObservationIgnored private var generation = 0
@@ -81,7 +86,19 @@ final class MacModel {
     case .stopped: return "Off"
     case .starting: return "Starting…"
     case .failed(let reason): return "Can’t listen: \(reason)"
-    case .listening: return isConnected ? "Connected to iPhone" : "Waiting for iPhone…"
+    case .listening:
+      guard isConnected else { return "Waiting for iPhone…" }
+      return isControllerOnUSB ? "Connected over USB" : "Connected to iPhone"
+    }
+  }
+
+  /// The USB cable's state, when an iPhone is plugged in and it isn't carrying the connection.
+  var usbDetail: String? {
+    guard acceptsConnections, !isControllerOnUSB else { return nil }
+    switch usbState {
+    case .waitingForApp: return "USB: open Souris on the iPhone"
+    case .connected: return "USB: linked"
+    case .stopped, .unavailable, .noDevice: return nil
     }
   }
 
@@ -128,6 +145,7 @@ final class MacModel {
       _ = CGRequestPostEventAccess()
     }
     refreshLocalAddress()
+    startUSBBridge()
     if acceptsConnections {
       startServer()
     }
@@ -239,6 +257,8 @@ final class MacModel {
     generation += 1
     server?.stop()
     server = nil
+    usbBridge?.stop()
+    isControllerOnUSB = false
     inputController.reset()
     serverState = .stopped
     controller = nil
@@ -263,8 +283,9 @@ final class MacModel {
         isControllerSilent = false
         dismissApprovals()
         scheduleRestart()
-      case .listening:
+      case .listening(let port):
         refreshLocalAddress()
+        usbBridge?.start(serverPort: port)
       case .starting:
         break
       }
@@ -281,6 +302,25 @@ final class MacModel {
       isControllerSilent = true
     case .controllerResumed:
       isControllerSilent = false
+    }
+  }
+
+  // MARK: - USB
+
+  /// The bridge lives as long as the app; it runs while the server listens.
+  private func startUSBBridge() {
+    let log = log
+    usbBridge = USBBridge { [weak self] event in
+      switch event {
+      case .log(let entry):
+        log.write(entry)
+      case .stateChanged(let state):
+        DispatchQueue.main.async {
+          MainActor.assumeIsolated {
+            self?.usbState = state
+          }
+        }
+      }
     }
   }
 
@@ -389,6 +429,12 @@ final class MacModel {
 
   private func tick() {
     tickCount += 1
+
+    let onUSB = isConnected && (usbBridge?.isRelaying ?? false)
+    if onUSB != isControllerOnUSB {
+      isControllerOnUSB = onUSB
+      log.log(.info, "app", "transport", nil, ["usb": .bool(onUSB)])
+    }
 
     if isConnected {
       let snapshot = inputController.snapshot
