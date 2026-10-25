@@ -224,8 +224,8 @@ struct SettingsView: View {
         Toggle("Hold to dictate", isOn: $model.settings.touch.wheel.holdsToDictate)
         SliderRow(
           title: "Dictation hold",
-          value: $model.settings.touch.wheel.dictationHoldTime,
-          range: 0.3...1,
+          value: $model.settings.touch.wheel.dictationHold,
+          range: 0.2...1,
           step: 0.05,
           fractionDigits: 2,
           unit: " s")

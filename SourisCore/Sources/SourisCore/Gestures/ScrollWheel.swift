@@ -56,9 +56,11 @@ public struct ScrollWheelSettings: Codable, Equatable, Sendable {
   /// Holding a finger still on the wheel dictates on the Mac until it lifts.
   public var holdsToDictate = true
 
-  /// How long the finger must hold still before dictation starts, seconds. Longer than
-  /// `ScrollWheel.tapDuration`, so a middle click never dictates.
-  public var dictationHoldTime: TimeInterval = 0.4
+  /// How long the finger must hold still before dictation starts, seconds. A still touch that
+  /// lifts sooner, and within `ScrollWheel.tapDuration`, is a middle click. Renamed from
+  /// `dictationHoldTime` when the default went from 0.4 s to 0.25 s, so phones that saved the old
+  /// default pick up the new one.
+  public var dictationHold: TimeInterval = 0.25
 
   public init() {}
 
@@ -83,8 +85,7 @@ public struct ScrollWheelSettings: Codable, Equatable, Sendable {
     ticksWhileSpinning = try container.decode(
       .ticksWhileSpinning, default: defaults.ticksWhileSpinning)
     holdsToDictate = try container.decode(.holdsToDictate, default: defaults.holdsToDictate)
-    dictationHoldTime = try container.decode(
-      .dictationHoldTime, default: defaults.dictationHoldTime)
+    dictationHold = try container.decode(.dictationHold, default: defaults.dictationHold)
   }
 }
 
@@ -125,7 +126,7 @@ public enum ScrollWheelEvent: Equatable, Codable, Sendable {
 ///   notch by notch, and stops below `stopRate`. A finger landing on the wheel stops it.
 /// - A touch that moves less than `tapSlop` and lifts within `tapDuration`, on a wheel that wasn't
 ///   spinning, is a tap: a middle click.
-/// - A touch that stays within `tapSlop` for `dictationHoldTime`, on a wheel that wasn't spinning,
+/// - A touch that stays within `tapSlop` for `dictationHold`, on a wheel that wasn't spinning,
 ///   starts dictation. From then until it lifts the wheel doesn't turn.
 /// - `.stop` follows once the wheel is at rest, its scrolling has glided out, and the finger has
 ///   lifted or held still for `restTime`.
@@ -297,7 +298,7 @@ public struct ScrollWheel: Sendable {
 
     if isTouching && !isDictating && settings.holdsToDictate && !wasSpinningAtTouch
       && !hasTurnedSinceTouch && farthest < Self.tapSlop,
-      let touchStart, time - touchStart.time >= settings.dictationHoldTime
+      let touchStart, time - touchStart.time >= settings.dictationHold
     {
       isDictating = true
       update.events.append(.dictation(isOn: true, time: time))

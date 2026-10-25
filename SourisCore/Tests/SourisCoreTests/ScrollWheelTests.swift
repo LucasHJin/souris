@@ -188,7 +188,9 @@ import simd
     let started = Self.dictationEvents(held)
     #expect(started.count == 1)
     let startTime = started.first?.time ?? 0
-    #expect(startTime >= Self.settings.dictationHoldTime && startTime < 0.42, "\(startTime)")
+    #expect(
+      startTime >= Self.settings.dictationHold && startTime < Self.settings.dictationHold + 0.02,
+      "\(startTime)")
     #expect(wheel.isDictating)
     // Rolling now neither turns nor ticks the wheel.
     let rolled = wheel.touchMoved(y: 260, time: 0.7, settings: Self.settings)
