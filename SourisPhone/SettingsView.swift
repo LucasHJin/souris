@@ -68,7 +68,7 @@ struct SettingsView: View {
       SliderRow(
         title: "Swivel reach",
         value: $model.settings.pipeline.pointer.sensorReach,
-        range: 0...0.1,
+        range: 0...0.25,
         step: 0.005,
         displayFactor: 100,
         unit: " cm")

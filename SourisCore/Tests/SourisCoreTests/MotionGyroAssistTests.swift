@@ -89,6 +89,7 @@ import simd
     session.path.yaw = { time in -0.2 * Synthetic.ramp(time, 0.5, 0.9) }
     var assisted = Synthetic.flatGainSettings
     assisted.pointer.gyroAssist = true
+    assisted.pointer.sensorReach = 0.03
     var unassisted = assisted
     unassisted.pointer.gyroAssist = false
     let expected = 2.5 * 30 * sin(0.2)

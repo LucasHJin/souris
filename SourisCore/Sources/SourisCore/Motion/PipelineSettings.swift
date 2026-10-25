@@ -33,9 +33,12 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     public var filterDerivativeCutoff: Double = 3
 
     /// How far ahead of the camera, along the phone's long axis toward the top edge, the virtual
-    /// sensor point sits, in metres. A longer reach makes a flat swivel move the cursor more.
-    /// The 13 Pro Max's camera sits 2–4 cm below the top edge.
-    public var sensorReach: Double = 0.03
+    /// sensor point sits, in metres. A longer reach makes a flat swivel move the cursor more, at
+    /// the cost of a little sideways drift from small twists while pushing. At 10 cm a 10° turn
+    /// about the phone's middle moves the cursor about 70 pt slow and up to about 300 pt fast; at
+    /// the old 3 cm it was about 40 pt and barely registered. The 13 Pro Max's camera sits 2–4 cm
+    /// below the top edge.
+    public var sensorReach: Double = 0.1
 
     /// Use the gyro for the swivel part of the motion (fresher than ARKit), and to keep swivel
     /// working through brief tracking dropouts.
