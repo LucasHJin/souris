@@ -163,6 +163,84 @@ import simd
     #expect(!wheel.needsFrames)
   }
 
+  // MARK: - Dictation
+
+  /// Holds a finger at y 200 from 0, advancing at 120 Hz until `until`, and returns every update.
+  static func hold(
+    _ wheel: inout ScrollWheel, until: Double, settings: ScrollWheelSettings = settings
+  ) -> Result {
+    var result = Result()
+    result.record(wheel.touchBegan(y: 200, time: 0), at: 0)
+    for frame in 1...Int(until * 120) {
+      let time = Double(frame) / 120
+      result.record(wheel.advance(to: time, settings: settings), at: time)
+    }
+    return result
+  }
+
+  static func dictationEvents(_ result: Result) -> [ScrollWheelEvent] {
+    result.events.filter { if case .dictation = $0 { true } else { false } }
+  }
+
+  @Test func holdingStillDictatesUntilTheFingerLifts() {
+    var wheel = ScrollWheel()
+    let held = Self.hold(&wheel, until: 0.6)
+    let started = Self.dictationEvents(held)
+    #expect(started.count == 1)
+    let startTime = started.first?.time ?? 0
+    #expect(startTime >= Self.settings.dictationHoldTime && startTime < 0.42, "\(startTime)")
+    #expect(wheel.isDictating)
+    // Rolling now neither turns nor ticks the wheel.
+    let rolled = wheel.touchMoved(y: 260, time: 0.7, settings: Self.settings)
+    #expect(rolled.ticks == 0)
+    #expect(abs(wheel.rotation) < 1e-9)
+    let lift = wheel.touchEnded(time: 0.8, settings: Self.settings)
+    #expect(lift.events == [.dictation(isOn: false, time: 0.8), .touch(isDown: false, time: 0.8)])
+    #expect(!lift.isTap)
+    #expect(!wheel.isDictating)
+    #expect(!wheel.isSpinning)
+  }
+
+  @Test func aRollThatComesToRestDoesNotDictate() {
+    let held = Self.perform(Roll(distance: 36, duration: 0.3, lifts: false, until: 1.5))
+    #expect(held.wheel.isTouching)
+    #expect(Self.dictationEvents(held).isEmpty)
+  }
+
+  @Test func aTouchThatStopsASpinDoesNotDictate() {
+    var wheel = ScrollWheel()
+    _ = wheel.touchBegan(y: 200, time: 0)
+    var time = 0.0
+    for step in 1...12 {
+      time = Double(step) / 120
+      _ = wheel.touchMoved(y: 200 - Double(step) * 10, time: time, settings: Self.settings)
+    }
+    _ = wheel.touchEnded(time: time, settings: Self.settings)
+    _ = wheel.advance(to: time + 0.02, settings: Self.settings)
+    #expect(wheel.isSpinning)
+    _ = wheel.touchBegan(y: 150, time: time + 0.03)
+    var events: [ScrollWheelEvent] = []
+    for frame in 1...120 {
+      events += wheel.advance(to: time + 0.03 + Double(frame) / 120, settings: Self.settings).events
+    }
+    #expect(!events.contains { if case .dictation = $0 { true } else { false } })
+  }
+
+  @Test func holdToDictateOffNeverDictates() {
+    var settings = Self.settings
+    settings.holdsToDictate = false
+    var wheel = ScrollWheel()
+    #expect(Self.dictationEvents(Self.hold(&wheel, until: 2, settings: settings)).isEmpty)
+  }
+
+  @Test func cancelStopsDictation() {
+    var wheel = ScrollWheel()
+    _ = Self.hold(&wheel, until: 0.6)
+    let cancelled = wheel.cancel(time: 0.7)
+    #expect(cancelled.events.first == .dictation(isOn: false, time: 0.7))
+    #expect(!wheel.isDictating)
+  }
+
   @Test func accelerationEasesBetweenTheSpeeds() {
     let settings = Self.settings
     #expect(ScrollWheel.acceleration(speed: 0, settings: settings) == 1)
@@ -259,6 +337,24 @@ import simd
     let after = steps.step(at: 2.8).state.cursor.x - steps.step(at: 2.3).state.cursor.x
     #expect(after > 100, "moved \(after) pt after")
     #expect(steps.step(at: 1.5).diagnostics.cursorGate == .wheelHeld)
+  }
+
+  @Test func aHoldSetsTheDictatingFlagUntilItLiftsOrThePhonePauses() {
+    var pipeline = MotionPipeline()
+    pipeline.handle(ScrollWheelEvent.touch(isDown: true, time: 1))
+    pipeline.handle(ScrollWheelEvent.dictation(isOn: true, time: 1.4))
+    #expect(pipeline.state.flags.contains(.dictating))
+    #expect(!pipeline.state.flags.contains(.scrollActive))
+    pipeline.handle(ScrollWheelEvent.dictation(isOn: false, time: 2))
+    #expect(!pipeline.state.flags.contains(.dictating))
+
+    pipeline.handle(ScrollWheelEvent.dictation(isOn: true, time: 3))
+    pipeline.setPaused(true)
+    #expect(!pipeline.state.flags.contains(.dictating))
+    let kinds = pipeline.drainEvents().map(\.kind)
+    #expect(kinds.filter { if case .dictation = $0 { true } else { false } } == [
+      .dictation(true), .dictation(false), .dictation(true), .dictation(false),
+    ])
   }
 
   @Test func pausingStopsTheWheelAndIgnoresItsEvents() {

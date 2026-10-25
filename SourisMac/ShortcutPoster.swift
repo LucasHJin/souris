@@ -25,6 +25,11 @@ final class ShortcutPoster {
     case disabled
   }
 
+  /// What Souris presses to start and to stop dictation: ⌃⌥D. Set the same shortcut in System
+  /// Settings → Keyboard → Dictation → Shortcut → Customize. The keyboard's 🎤 key sends a
+  /// hardware code an app can't make, and ⌃⌥Space switches input sources.
+  static let dictation = KeyCombo(keyCode: 0x02, flags: [.maskControl, .maskAlternate])
+
   private static let missionControlApp = URL(
     fileURLWithPath: "/System/Applications/Mission Control.app")
 

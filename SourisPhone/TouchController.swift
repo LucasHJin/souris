@@ -8,9 +8,10 @@ import SourisCore
 /// Runs the `TouchClassifier` and the `ScrollWheel` on the main thread and forwards their events
 /// to the engine.
 ///
-/// A touch that begins on the wheel rolls it instead of pressing a button, and a tap on it is a
-/// middle click. While the wheel is touched, spinning or letting out its scrolling, a display link
-/// advances it every refresh, and each notch it passes plays a haptic tick.
+/// A touch that begins on the wheel rolls it instead of pressing a button, a tap on it is a
+/// middle click, and holding it still dictates on the Mac until it lifts. While the wheel is
+/// touched, spinning or letting out its scrolling, a display link advances it every refresh, and
+/// each notch it passes plays a haptic tick.
 ///
 /// UIKit touch timestamps and `ProcessInfo.systemUptime` share a clock, so the classifier's
 /// deadlines are scheduled directly on the main queue.
@@ -22,9 +23,11 @@ final class TouchController {
   /// The buttons the classifier reports as held, for the press feedback on screen.
   private(set) var heldButtons: MouseButtons = []
 
-  /// The wheel's turn in notches and whether a finger is on it, for drawing it.
+  /// The wheel's turn in notches, whether a finger is on it and whether it is dictating, for
+  /// drawing it.
   private(set) var wheelRotation: Double = 0
   private(set) var isWheelTouched = false
+  private(set) var isDictating = false
 
   @ObservationIgnored private var classifier: TouchClassifier
   @ObservationIgnored private var wheel = ScrollWheel()
@@ -32,6 +35,7 @@ final class TouchController {
   @ObservationIgnored private let engine: MouseEngine
   @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
   @ObservationIgnored private let tickHaptic = UIImpactFeedbackGenerator(style: .rigid)
+  @ObservationIgnored private let dictationHaptic = UIImpactFeedbackGenerator(style: .medium)
   @ObservationIgnored private var lastTickAt: TimeInterval = 0
   @ObservationIgnored private var frameTicker: FrameTicker?
   @ObservationIgnored private var pendingAdvance: DispatchWorkItem?
@@ -70,6 +74,7 @@ final class TouchController {
         if hapticsEnabled {
           tickHaptic.prepare()
           haptic.prepare()
+          dictationHaptic.prepare()
         }
         handle(wheel.touchBegan(y: Double(location.y), time: touch.timestamp))
         continue
@@ -164,6 +169,19 @@ final class TouchController {
     }
     if update.ticks > 0 {
       playTick()
+    }
+    for case .dictation(let isOn, _) in update.events {
+      // A firm tap when the Mac starts listening, a light one when it stops.
+      if hapticsEnabled {
+        if isOn {
+          dictationHaptic.impactOccurred(intensity: 1)
+        } else {
+          haptic.impactOccurred()
+        }
+      }
+    }
+    if wheel.isDictating != isDictating {
+      isDictating = wheel.isDictating
     }
     if wheel.rotation != wheelRotation {
       wheelRotation = wheel.rotation

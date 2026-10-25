@@ -95,6 +95,29 @@ struct RemoteStateTrackerTests {
     #expect(try applied(&tracker, packet(seq: 1, epoch: 2, shortcuts: restarted)).shortcuts.isEmpty)
   }
 
+  // MARK: - Dictation
+
+  @Test func theDictatingFlagStartsAndStopsDictationOnce() throws {
+    var tracker = RemoteStateTracker()
+    #expect(try applied(&tracker, packet(seq: 1)).dictation == nil)
+    #expect(try applied(&tracker, packet(seq: 2, flags: .dictating)).dictation == true)
+    #expect(try applied(&tracker, packet(seq: 3, flags: .dictating)).dictation == nil)
+    #expect(try applied(&tracker, packet(seq: 5)).dictation == false)
+  }
+
+  @Test func releasingEverythingStopsDictation() throws {
+    var tracker = RemoteStateTracker()
+    _ = tracker.apply(packet(seq: 1, flags: .dictating))
+    #expect(tracker.releaseAll().dictation == false)
+    #expect(tracker.releaseAll().dictation == nil)
+  }
+
+  @Test func aRestartedPhoneThatIsNotDictatingStopsIt() throws {
+    var tracker = RemoteStateTracker()
+    _ = tracker.apply(packet(seq: 1, flags: .dictating))
+    #expect(try applied(&tracker, packet(seq: 1, epoch: 2)).dictation == false)
+  }
+
   // MARK: - Stale packets
 
   @Test func duplicateIsStale() {

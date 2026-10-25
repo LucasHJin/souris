@@ -115,6 +115,9 @@ final class InputController: @unchecked Sendable {
         }
         post(update, phoneTime: Double(packet.phoneTimeMicros) / 1_000_000)
         press(update.shortcuts)
+        if let isOn = update.dictation {
+          toggleDictation(isOn)
+        }
       }
       countPacket()
 
@@ -207,6 +210,9 @@ final class InputController: @unchecked Sendable {
         .info, "input", "releaseAll", "Released what the phone held",
         ["buttons": .int(releases.buttonChanges.count), "scrolls": .int(releases.scrollEvents.count)])
     }
+    if let isOn = releases.dictation {
+      toggleDictation(isOn)
+    }
     let scrollEnd = pacedScroll.cancel()
     if playout.pacing == .immediate {
       poster.post(releases)
@@ -258,6 +264,13 @@ final class InputController: @unchecked Sendable {
       }
       log.log(level, "input", "shortcut", nil, fields)
     }
+  }
+
+  /// Presses the dictation shortcut, which macOS's Dictation toggles on, so the same press
+  /// starts and stops it.
+  private func toggleDictation(_ isOn: Bool) {
+    shortcutPoster.post(ShortcutPoster.dictation)
+    log.log(.info, "input", "dictation", isOn ? "Started dictation" : "Stopped dictation", [:])
   }
 
   /// Posts the motion and scrolling from what has been posted so far to `frame`.

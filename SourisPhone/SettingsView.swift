@@ -221,6 +221,15 @@ struct SettingsView: View {
           fractionDigits: 2)
         Toggle("Tick while spinning", isOn: $model.settings.touch.wheel.ticksWhileSpinning)
         Toggle("Tap for middle click", isOn: $model.settings.touch.wheel.tapClicksMiddle)
+        Toggle("Hold to dictate", isOn: $model.settings.touch.wheel.holdsToDictate)
+        SliderRow(
+          title: "Dictation hold",
+          value: $model.settings.touch.wheel.dictationHoldTime,
+          range: 0.3...1,
+          step: 0.05,
+          fractionDigits: 2,
+          unit: " s")
+          .disabled(!model.settings.touch.wheel.holdsToDictate)
         Toggle("Reverse direction", isOn: $model.settings.touch.wheel.isReversed)
         SliderRow(
           title: "Width",
@@ -238,7 +247,9 @@ struct SettingsView: View {
         "Roll a fingertip along the strip between the buttons like a mouse wheel: each notch "
           + "ticks and scrolls one step, more when you roll fast. Flick it to let it spin on; "
           + "touch it to stop. The pointer holds still while your finger is on it. Ticks need "
-          + "Haptics on. If ticks while spinning make the pointer shake, turn them off.")
+          + "Haptics on. If ticks while spinning make the pointer shake, turn them off. Hold "
+          + "it still to dictate on the Mac until you lift: set the Mac’s Dictation shortcut "
+          + "to ⌃⌥D in System Settings → Keyboard → Dictation.")
     }
   }
 

@@ -195,6 +195,9 @@ public struct MotionPipeline: Sendable {
   private var scrollTilt = ScrollTilt()
   private var buttonScroll = ButtonScroll()
 
+  /// A finger holds the scroll wheel to dictate (`ScrollWheelEvent.dictation`).
+  private var isDictating = false
+
   /// When each volume button was last pressed, repeats included, uptime seconds.
   private var lastVolumePress: [ScrollButtonPress.Direction: TimeInterval] = [:]
   private var liftClutch = LiftClutch()
@@ -427,7 +430,8 @@ public struct MotionPipeline: Sendable {
 
   /// Feeds one event from the scroll wheel. A finger on the wheel holds the cursor still, as
   /// rolling it pushes the phone; landing and lifting each start a click freeze too. Turns add to
-  /// the scroll and keep `scrollActive` set until the wheel stops. Ignored while paused.
+  /// the scroll and keep `scrollActive` set until the wheel stops, and a hold sets `dictating`
+  /// until the finger lifts. Ignored while paused.
   public mutating func handle(_ event: ScrollWheelEvent) {
     inputTime = event.time
     guard !isPaused else { return }
@@ -449,6 +453,11 @@ public struct MotionPipeline: Sendable {
       wheelScrolled += pixels
     case .stop:
       endWheelScroll()
+    case .dictation(let isOn, _):
+      if isOn != isDictating {
+        isDictating = isOn
+        emit(.dictation(isOn))
+      }
     }
     refreshGate(at: inputTime)
     finishInput()
@@ -464,6 +473,10 @@ public struct MotionPipeline: Sendable {
       endButtonScroll()
       endWheelScroll()
       isWheelHeld = false
+      if isDictating {
+        isDictating = false
+        emit(.dictation(false))
+      }
       clickFreeze.cancel()
     } else if self.isPaused {
       needsEngage = true
@@ -892,6 +905,9 @@ public struct MotionPipeline: Sendable {
     }
     if isPaused {
       flags.insert(.paused)
+    }
+    if isDictating {
+      flags.insert(.dictating)
     }
     state.flags = flags
 

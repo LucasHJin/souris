@@ -57,6 +57,9 @@ public struct PipelineEvent: Equatable, Codable, Sendable {
     /// A volume button asked the Mac for a shortcut.
     case shortcutPressed(MacShortcut)
 
+    /// Dictation started (a finger held the scroll wheel) or stopped.
+    case dictation(Bool)
+
     case paused(Bool)
 
     case recentered

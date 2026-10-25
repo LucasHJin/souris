@@ -31,7 +31,7 @@ public struct ButtonChange: Equatable, Sendable {
 /// What the Mac should do in response to one state packet.
 ///
 /// Apply in this order: `cursorDelta`, then `buttonChanges` in array order (releases come before
-/// presses), then `scrollEvents` in array order, then `shortcuts`.
+/// presses), then `scrollEvents` in array order, then `shortcuts`, then `dictation`.
 public struct InputUpdate: Equatable, Sendable {
   /// Screen points to move, +y down.
   public var cursorDelta: SIMD2<Double>
@@ -43,6 +43,9 @@ public struct InputUpdate: Equatable, Sendable {
   /// Mac shortcuts to press, in order.
   public var shortcuts: [MacShortcut]
 
+  /// Start (true) or stop (false) dictation; nil leaves it as it is.
+  public var dictation: Bool?
+
   /// State packets missing between the last one applied and this one: lost, or replaced by a
   /// newer one before they went, as Bluetooth does. The motion then spans the whole gap.
   public var missedPackets: Int
@@ -52,18 +55,21 @@ public struct InputUpdate: Equatable, Sendable {
     buttonChanges: [ButtonChange] = [],
     scrollEvents: [ScrollEvent] = [],
     shortcuts: [MacShortcut] = [],
+    dictation: Bool? = nil,
     missedPackets: Int = 0
   ) {
     self.cursorDelta = cursorDelta
     self.buttonChanges = buttonChanges
     self.scrollEvents = scrollEvents
     self.shortcuts = shortcuts
+    self.dictation = dictation
     self.missedPackets = missedPackets
   }
 
   /// True when there's nothing to post.
   public var isEmpty: Bool {
     cursorDelta == .zero && buttonChanges.isEmpty && scrollEvents.isEmpty && shortcuts.isEmpty
+      && dictation == nil
   }
 }
 
@@ -105,6 +111,9 @@ public struct PacketStats: Equatable, Sendable {
 ///   remaining delta and then `.ended`.
 /// - Shortcuts are pressed as often as their counts rose since the last applied packet. A
 ///   baseline packet presses none, so a phone that restarts never replays old presses.
+/// - Dictation is absolute, like the buttons: `StateFlags.dictating` setting starts it and
+///   clearing stops it, and across an epoch change the new epoch's first packet stops one the
+///   phone no longer holds.
 /// - A packet whose cursor or scroll totals aren't finite is dropped and counted as stale, so one
 ///   bad packet can't poison the baseline.
 public struct RemoteStateTracker: Sendable {
@@ -113,6 +122,9 @@ public struct RemoteStateTracker: Sendable {
 
   /// True between a posted `.began` and its `.ended`.
   public private(set) var isScrolling = false
+
+  /// True between a dictation start the Mac was told about and its stop.
+  public private(set) var isDictating = false
 
   public private(set) var stats = PacketStats()
 
@@ -175,17 +187,26 @@ public struct RemoteStateTracker: Sendable {
     update.buttonChanges = updateButtons(to: state.buttons.intersection(Self.postableButtons))
     update.scrollEvents = updateScroll(
       isActive: state.flags.contains(.scrollActive), delta: scrollDelta)
+    update.dictation = updateDictation(to: state.flags.contains(.dictating))
     return update
   }
 
-  /// Releases every held button and ends any scroll. Use when the phone goes silent, says bye or
-  /// is disconnected. The next packet starts a fresh baseline.
+  /// Releases every held button, ends any scroll and stops dictation. Use when the phone goes
+  /// silent, says bye or is disconnected. The next packet starts a fresh baseline.
   public mutating func releaseAll() -> InputUpdate {
     var update = InputUpdate()
     update.buttonChanges = updateButtons(to: [])
     update.scrollEvents = updateScroll(isActive: false, delta: .zero)
+    update.dictation = updateDictation(to: false)
     needsBaseline = true
     return update
+  }
+
+  /// Moves `isDictating` to `isOn` and returns the change, if any.
+  private mutating func updateDictation(to isOn: Bool) -> Bool? {
+    guard isOn != isDictating else { return nil }
+    isDictating = isOn
+    return isOn
   }
 
   /// Moves `heldButtons` to `target` and returns the changes, releases first.

@@ -164,6 +164,8 @@ extension PipelineEvent {
       )
     case .shortcutPressed(let shortcut):
       return (.info, "shortcut", ["shortcut": .string(shortcut.logName)])
+    case .dictation(let isOn):
+      return (.info, "dictation", ["on": .bool(isOn)])
     case .paused(let isPaused):
       return (.info, "paused", ["paused": .bool(isPaused)])
     case .recentered:

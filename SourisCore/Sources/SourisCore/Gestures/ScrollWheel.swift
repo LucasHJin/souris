@@ -53,6 +53,13 @@ public struct ScrollWheelSettings: Codable, Equatable, Sendable {
   /// The wheel keeps ticking while it spins on after a flick.
   public var ticksWhileSpinning = true
 
+  /// Holding a finger still on the wheel dictates on the Mac until it lifts.
+  public var holdsToDictate = true
+
+  /// How long the finger must hold still before dictation starts, seconds. Longer than
+  /// `ScrollWheel.tapDuration`, so a middle click never dictates.
+  public var dictationHoldTime: TimeInterval = 0.4
+
   public init() {}
 
   public init(from decoder: any Decoder) throws {
@@ -75,6 +82,9 @@ public struct ScrollWheelSettings: Codable, Equatable, Sendable {
     tickIntensity = try container.decode(.tickIntensity, default: defaults.tickIntensity)
     ticksWhileSpinning = try container.decode(
       .ticksWhileSpinning, default: defaults.ticksWhileSpinning)
+    holdsToDictate = try container.decode(.holdsToDictate, default: defaults.holdsToDictate)
+    dictationHoldTime = try container.decode(
+      .dictationHoldTime, default: defaults.dictationHoldTime)
   }
 }
 
@@ -91,11 +101,15 @@ public enum ScrollWheelEvent: Equatable, Codable, Sendable {
   /// The wheel came to rest and everything it queued has scrolled.
   case stop(time: TimeInterval)
 
+  /// A finger held still on the wheel started dictation (`isOn`), or lifted and stopped it.
+  case dictation(isOn: Bool, time: TimeInterval)
+
   public var time: TimeInterval {
     switch self {
     case .touch(_, let time): time
     case .turn(_, let time): time
     case .stop(let time): time
+    case .dictation(_, let time): time
     }
   }
 }
@@ -111,11 +125,14 @@ public enum ScrollWheelEvent: Equatable, Codable, Sendable {
 ///   notch by notch, and stops below `stopRate`. A finger landing on the wheel stops it.
 /// - A touch that moves less than `tapSlop` and lifts within `tapDuration`, on a wheel that wasn't
 ///   spinning, is a tap: a middle click.
+/// - A touch that stays within `tapSlop` for `dictationHoldTime`, on a wheel that wasn't spinning,
+///   starts dictation. From then until it lifts the wheel doesn't turn.
 /// - `.stop` follows once the wheel is at rest, its scrolling has glided out, and the finger has
 ///   lifted or held still for `restTime`.
 ///
-/// Call `advance(to:settings:)` every display refresh while `needsFrames`. Positions are the
-/// touch's y in points (down the screen); times are uptime seconds.
+/// Call `advance(to:settings:)` every display refresh while `needsFrames` or `isTouching` (a hold
+/// starts dictation there). Positions are the touch's y in points (down the screen); times are
+/// uptime seconds.
 public struct ScrollWheel: Sendable {
   public static let tapSlop: Double = 8
   public static let tapDuration: TimeInterval = 0.25
@@ -147,6 +164,9 @@ public struct ScrollWheel: Sendable {
 
   public private(set) var isTouching = false
 
+  /// A held finger is dictating.
+  public private(set) var isDictating = false
+
   /// How far the wheel has turned, notches, positive toward the top edge. The ridges drawn on it
   /// follow this, so they move with the finger and keep moving through a spin.
   public private(set) var rotation: Double = 0
@@ -163,6 +183,7 @@ public struct ScrollWheel: Sendable {
   /// The furthest the finger has been from where it landed, points.
   private var farthest: Double = 0
   private var wasSpinningAtTouch = false
+  private var hasTurnedSinceTouch = false
 
   /// Spin rate, notches per second, positive toward the top edge, and the part of a notch it has
   /// turned since the last one.
@@ -200,6 +221,7 @@ public struct ScrollWheel: Sendable {
     fingerVelocity = 0
     travel = 0
     farthest = 0
+    hasTurnedSinceTouch = false
     if lastAdvance == nil {
       lastAdvance = time
     }
@@ -223,6 +245,7 @@ public struct ScrollWheel: Sendable {
     if let touchStart {
       farthest = max(farthest, abs(y - touchStart.y))
     }
+    guard !isDictating else { return update }
     let spacing = max(1, settings.notchSpacing)
     rotation -= step / spacing
     travel -= step
@@ -232,6 +255,7 @@ public struct ScrollWheel: Sendable {
       queueNotch(sign, speed: abs(fingerVelocity), settings: settings)
       update.ticks += 1
       lastNotchTime = time
+      hasTurnedSinceTouch = true
     }
     return update
   }
@@ -241,6 +265,14 @@ public struct ScrollWheel: Sendable {
     var update = Update()
     guard isTouching else { return update }
     isTouching = false
+    if isDictating {
+      isDictating = false
+      update.events.append(.dictation(isOn: false, time: time))
+      update.events.append(.touch(isDown: false, time: time))
+      touchStart = nil
+      lastMove = nil
+      return update
+    }
     update.events.append(.touch(isDown: false, time: time))
     let duration = time - (touchStart?.time ?? time)
     update.isTap = settings.tapClicksMiddle && !wasSpinningAtTouch
@@ -262,6 +294,14 @@ public struct ScrollWheel: Sendable {
     var update = Update()
     let interval = max(0, time - (lastAdvance ?? time))
     lastAdvance = time
+
+    if isTouching && !isDictating && settings.holdsToDictate && !wasSpinningAtTouch
+      && !hasTurnedSinceTouch && farthest < Self.tapSlop,
+      let touchStart, time - touchStart.time >= settings.dictationHoldTime
+    {
+      isDictating = true
+      update.events.append(.dictation(isOn: true, time: time))
+    }
 
     if spin != 0 && interval > 0 {
       let momentumTime = max(0.01, settings.momentumTime)
@@ -313,6 +353,9 @@ public struct ScrollWheel: Sendable {
   /// the app goes inactive.
   public mutating func cancel(time: TimeInterval) -> Update {
     var update = Update()
+    if isDictating {
+      update.events.append(.dictation(isOn: false, time: time))
+    }
     if isTouching {
       update.events.append(.touch(isDown: false, time: time))
     }

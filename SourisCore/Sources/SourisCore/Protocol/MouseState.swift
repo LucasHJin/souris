@@ -42,6 +42,10 @@ public struct StateFlags: OptionSet, Hashable, Codable, Sendable {
   /// The phone app is paused (settings open, app inactive). No output is produced.
   public static let paused = StateFlags(rawValue: 1 << 3)
 
+  /// A finger holds the scroll wheel to dictate. The Mac presses its dictation shortcut when this
+  /// sets and again when it clears.
+  public static let dictating = StateFlags(rawValue: 1 << 4)
+
   public let rawValue: UInt8
 
   public init(rawValue: UInt8) {
