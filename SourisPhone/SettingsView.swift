@@ -248,8 +248,9 @@ struct SettingsView: View {
           + "ticks and scrolls one step, more when you roll fast. Flick it to let it spin on; "
           + "touch it to stop. The pointer holds still while your finger is on it. Ticks need "
           + "Haptics on. If ticks while spinning make the pointer shake, turn them off. Hold "
-          + "it still to dictate on the Mac until you lift: set the Mac’s Dictation shortcut "
-          + "to ⌃⌥D in System Settings → Keyboard → Dictation.")
+          + "it still to dictate on the Mac until you lift; a firm tap says it’s listening. "
+          + "Turn on Dictation in the Mac’s System Settings → Keyboard, and set its shortcut "
+          + "to ⌃⌥D for when the 🎤 key doesn’t start it.")
     }
   }
 

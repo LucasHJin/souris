@@ -75,6 +75,9 @@ public enum ServerEvent: Equatable, Sendable {
 ///   device takes over only when the controller has been silent for `silenceTimeout`; until then
 ///   it gets `welcome(busy)` and its state packets are ignored.
 /// - Every ping from an approved device gets an immediate pong on the same connection.
+/// - `setStatus(_:)` sends the Mac's status to the controller on the flow its last state came
+///   in on, and again after each pong to it while the status isn't empty or changed within
+///   `statusResendWindow`, so a lost one is replaced within a ping interval.
 /// - `disconnectController()` kicks the controller's current session: that device and epoch get
 ///   `welcome(disconnected)` and are ignored until the phone starts a new session.
 /// - Connections silent for `idleConnectionTimeout` are cancelled.
@@ -140,9 +143,15 @@ public final class SourisServer: @unchecked Sendable {
     var epoch: UInt16
     var lastState: ContinuousClock.Instant
     var hasReportedSilence = false
+
+    /// The flow its last state came in on.
+    var flow: Int
   }
 
   private static let timerInterval = DispatchTimeInterval.milliseconds(100)
+
+  /// How long after a status change it is still repeated after pongs when it is empty.
+  private static let statusResendWindow = Duration.seconds(1)
   private static let logCategory = "server"
 
   private let queue: DispatchQueue
@@ -167,6 +176,9 @@ public final class SourisServer: @unchecked Sendable {
 
   private var logInboxes: [UUID: LogInbox] = [:]
   private var logLimiter = LogRateLimiter()
+
+  private var status = MacStatus()
+  private var statusChangedAt: ContinuousClock.Instant?
 
   public init(
     configuration: Configuration,
@@ -249,6 +261,18 @@ public final class SourisServer: @unchecked Sendable {
       }
       for (id, connection) in connections where connection.peer?.deviceID == deviceID {
         sendWelcome(welcomeStatus(for: deviceID, epoch: connection.epoch), on: id)
+      }
+    }
+  }
+
+  /// Sets what the Mac reports to the controlling phone, and sends it now if it changed.
+  public func setStatus(_ status: MacStatus) {
+    queue.async { [self] in
+      guard status != self.status else { return }
+      self.status = status
+      statusChangedAt = .now
+      if let flow = controller?.flow {
+        send(.status(StatusPacket(status: status)), on: flow)
       }
     }
   }
@@ -505,7 +529,7 @@ public final class SourisServer: @unchecked Sendable {
       handleBye(bye, on: id)
     case .log(let log):
       handleLog(log, on: id)
-    case .pong, .welcome, .logAck:
+    case .pong, .welcome, .logAck, .status:
       logLimited(
         .warning, "unexpectedPacket", "A packet only the Mac sends arrived from a phone",
         fields: ["flow": .int(id)])
@@ -580,7 +604,7 @@ public final class SourisServer: @unchecked Sendable {
         fields["reason"] = "first state"
       }
       log(.info, "controller", fields: fields)
-      controller = Controller(peer: peer, epoch: state.epoch, lastState: now)
+      controller = Controller(peer: peer, epoch: state.epoch, lastState: now, flow: id)
       emit(.controllerChanged(peer))
     } else if let current = controller, current.hasReportedSilence {
       log(
@@ -593,6 +617,7 @@ public final class SourisServer: @unchecked Sendable {
     controller?.epoch = state.epoch
     controller?.lastState = now
     controller?.hasReportedSilence = false
+    controller?.flow = id
     emit(.state(state))
   }
 
@@ -606,6 +631,10 @@ public final class SourisServer: @unchecked Sendable {
     let pong = PongPacket(
       id: ping.id, phoneTimeMicros: ping.phoneTimeMicros, macTimeMicros: Uptime.micros())
     send(.pong(pong), on: id)
+    let isRecent = statusChangedAt.map { .now - $0 < Self.statusResendWindow } ?? false
+    if controller?.flow == id, !status.isEmpty || isRecent {
+      send(.status(StatusPacket(status: status)), on: id)
+    }
   }
 
   private func handleBye(_ bye: ByePacket, on id: Int) {

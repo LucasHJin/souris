@@ -54,6 +54,9 @@ struct PacketCodingTests {
           .recordingEnded(recordingID: 9),
         ])),
     .logAck(LogAckPacket(stream: 0xDEAD_BEEF, throughID: 0x0102_0304)),
+    .status(StatusPacket(status: [])),
+    .status(StatusPacket(status: .dictationListening)),
+    .status(StatusPacket(status: MacStatus(rawValue: 0xFF))),
   ]
 
   // MARK: - Round trips
@@ -219,6 +222,11 @@ struct PacketCodingTests {
         == [0x52, 0x53, 0x01, 0x09, 0x04, 0x03, 0x02, 0x01, 0x0D, 0x0C, 0x0B, 0x0A])
   }
 
+  @Test func statusLayoutMatchesGoldenBytes() {
+    let status = StatusPacket(status: .dictationListening)
+    #expect(Array(Packet.status(status).encoded()) == [0x52, 0x53, 0x01, 0x0A, 0x01])
+  }
+
   @Test func disconnectedWelcomeMatchesGoldenBytes() throws {
     let golden: [UInt8] = [0x52, 0x53, 0x01, 0x06, 0x04, 0x02, 0x4D, 0x61]
     #expect(
@@ -313,7 +321,7 @@ struct PacketCodingTests {
     #expect(throws: PacketDecodeError.unsupportedVersion(2)) { try Packet.decode(Data(bytes)) }
   }
 
-  @Test(arguments: [0, 4, 10, 255] as [UInt8])
+  @Test(arguments: [0, 4, 11, 255] as [UInt8])
   func unknownTypeIsRejected(type: UInt8) {
     let bytes: [UInt8] = [0x52, 0x53, 0x01, type, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     #expect(throws: PacketDecodeError.unknownType(type)) { try Packet.decode(Data(bytes)) }

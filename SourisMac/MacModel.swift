@@ -283,6 +283,7 @@ final class MacModel {
       input.handle(event, report: report)
     }
     server.approvedDevices = approvedDeviceIDs
+    input.attach(server)
     self.server = server
     serverState = .starting
     server.start()

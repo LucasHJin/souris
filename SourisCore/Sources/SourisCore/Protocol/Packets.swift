@@ -33,6 +33,7 @@ public enum PacketType: UInt8, Sendable {
   case bye = 7
   case log = 8
   case logAck = 9
+  case status = 10
 }
 
 /// Phone → Mac, on every pipeline tick and as a keepalive.
@@ -191,6 +192,28 @@ public struct LogAckPacket: Equatable, Sendable {
   }
 }
 
+/// What the Mac is doing for the phone that the phone can't see for itself.
+public struct MacStatus: OptionSet, Equatable, Sendable {
+  public let rawValue: UInt8
+
+  public init(rawValue: UInt8) {
+    self.rawValue = rawValue
+  }
+
+  /// macOS's Dictation is listening for the phone's wheel hold.
+  public static let dictationListening = MacStatus(rawValue: 1 << 0)
+}
+
+/// Mac → phone, the Mac's status: sent when it changes, and after each pong to the controlling
+/// phone while it isn't empty or has just changed, so a lost one is soon replaced.
+public struct StatusPacket: Equatable, Sendable {
+  public var status: MacStatus
+
+  public init(status: MacStatus) {
+    self.status = status
+  }
+}
+
 /// Any packet on the wire.
 ///
 /// Layout (little-endian): `magic u16`, `version u8`, `type u8`, then the payload. See
@@ -204,6 +227,7 @@ public enum Packet: Equatable, Sendable {
   case bye(ByePacket)
   case log(LogPacket)
   case logAck(LogAckPacket)
+  case status(StatusPacket)
 
   /// The packet's bytes, header included.
   ///
@@ -267,6 +291,10 @@ public enum Packet: Equatable, Sendable {
       var writer = ByteWriter(type: .logAck, payloadCapacity: WireLayout.logAckPayloadSize)
       writer.write(packet.stream)
       writer.write(packet.throughID)
+      return writer.data
+    case .status(let packet):
+      var writer = ByteWriter(type: .status, payloadCapacity: WireLayout.statusPayloadSize)
+      writer.write(packet.status.rawValue)
       return writer.data
     }
   }
@@ -356,6 +384,8 @@ public enum Packet: Equatable, Sendable {
       let stream = try reader.read(UInt32.self)
       let throughID = try reader.read(UInt32.self)
       return .logAck(LogAckPacket(stream: stream, throughID: throughID))
+    case .status:
+      return .status(StatusPacket(status: MacStatus(rawValue: try reader.read(UInt8.self))))
     case .action, nil:
       throw .unknownType(rawType)
     }

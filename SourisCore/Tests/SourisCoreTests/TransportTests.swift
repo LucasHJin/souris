@@ -744,6 +744,59 @@ struct TransportTests {
     #expect(stats.pingLoss == 0)
   }
 
+  // MARK: Mac status
+
+  @Test func theMacsStatusReachesTheControllingPhone() async throws {
+    let phone = UUID()
+    let server = TestServer(approved: [phone])
+    let port = try await server.start()
+    let client = TestClient(port: port, deviceID: phone)
+    let statuses = Recorder<MacStatus>()
+    client.client.onMacStatus = { statuses.append($0) }
+    defer {
+      client.client.stop()
+      server.server.stop()
+    }
+
+    client.client.start()
+    try await client.waitForStatus(.connected(macName: macName))
+    client.send(cursorX: 1)
+    try await waitUntil("the phone to control the pointer") { !server.events.states.isEmpty }
+
+    server.server.setStatus(.dictationListening)
+    try await waitUntil("listening on the phone") { statuses.values == [.dictationListening] }
+    server.server.setStatus([])
+    try await waitUntil("not listening on the phone") {
+      statuses.values == [.dictationListening, []]
+    }
+  }
+
+  @Test func aStatusIsRepeatedAfterPongsWhileItIsSet() async throws {
+    let device = UUID()
+    let server = TestServer(approved: [device])
+    let port = try await server.start()
+    let peer = RawPeer(port: port)
+    defer {
+      peer.cancel()
+      server.server.stop()
+    }
+
+    func statusCount() -> Int {
+      peer.received.values.filter { $0 == .status(StatusPacket(status: .dictationListening)) }
+        .count
+    }
+
+    peer.hello(deviceID: device)
+    try await waitUntil("the accepted welcome") { peer.hasWelcome(.accepted) }
+    peer.state(seq: 1)
+    try await waitUntil("the phone to control the pointer") { !server.events.states.isEmpty }
+    server.server.setStatus(.dictationListening)
+    try await waitUntil("the status") { statusCount() == 1 }
+    // A lost status is replaced by the one that follows the next pong.
+    peer.send(.ping(PingPacket(id: 1, phoneTimeMicros: 0)))
+    try await waitUntil("the status after the pong") { statusCount() == 2 }
+  }
+
   @Test func unapprovedPeersGetNoPongUntilApproved() async throws {
     let server = TestServer()
     let port = try await server.start()

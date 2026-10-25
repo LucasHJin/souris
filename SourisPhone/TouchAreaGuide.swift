@@ -48,8 +48,9 @@ struct TouchAreaGuide: View {
 
 /// The scroll wheel: a capsule a shade lighter than the surface, with faint ridges a notch apart
 /// that move with the finger and keep moving while the wheel spins. It lightens while touched or
-/// middle-clicked, and shows a microphone while a hold dictates. Reads the rotation itself so
-/// only it redraws while the wheel turns.
+/// middle-clicked, and shows a microphone while a hold dictates: faint while the Mac's Dictation
+/// starts, bright once it listens. Reads the rotation itself so only it redraws while the wheel
+/// turns.
 private struct WheelStrip: View {
   let controller: TouchController
   let notchSpacing: Double
@@ -99,7 +100,8 @@ private struct WheelStrip: View {
       if controller.isDictating {
         Image(systemName: "mic.fill")
           .font(.system(size: 15, weight: .medium))
-          .foregroundStyle(.white.opacity(0.7))
+          .foregroundStyle(.white.opacity(controller.isDictationListening ? 0.75 : 0.3))
+          .animation(.easeOut(duration: 0.15), value: controller.isDictationListening)
           .transition(.scale(scale: 0.8).combined(with: .opacity))
       }
     }

@@ -67,6 +67,10 @@ final class MouseEngine: @unchecked Sendable {
   private var wheelTouchedAt: TimeInterval?
   private var dictationStartedAt: TimeInterval?
 
+  /// Whether the Mac last said Dictation is listening, and who to tell when that changes.
+  private var isDictationListening = false
+  private var onDictationListening: (@MainActor @Sendable (Bool) -> Void)?
+
   // Lazy so the callbacks can capture `self`; first touched from `queue`.
   private lazy var arTracker = ARTracker(
     queue: queue,
@@ -173,6 +177,12 @@ final class MouseEngine: @unchecked Sendable {
       drainPipelineEvents()
       sendIfChanged()
     }
+  }
+
+  /// Calls `handler` on the main thread when the Mac's Dictation starts or stops listening for a
+  /// wheel hold.
+  func observeDictationListening(_ handler: @escaping @MainActor @Sendable (Bool) -> Void) {
+    queue.async { [self] in onDictationListening = handler }
   }
 
   /// Forwards one volume-button press.
@@ -346,6 +356,10 @@ final class MouseEngine: @unchecked Sendable {
       guard let self, generation == clientGeneration else { return }
       macNames = names
     }
+    client.onMacStatus = { [weak self] status in
+      guard let self, generation == clientGeneration else { return }
+      setDictationListening(status.contains(.dictationListening))
+    }
     self.client = client
     clientStatus = client.status
     lastSent = nil
@@ -358,6 +372,22 @@ final class MouseEngine: @unchecked Sendable {
     client?.stop()
     client = nil
     clientStatus = .stopped
+    setDictationListening(false)
+  }
+
+  /// Passes on whether the Mac's Dictation listens, logging how long after the hold started it
+  /// began to (on queue).
+  private func setDictationListening(_ listening: Bool) {
+    guard listening != isDictationListening else { return }
+    isDictationListening = listening
+    var fields: [String: LogValue] = ["listening": .bool(listening)]
+    if listening, let dictationStartedAt {
+      let seconds = ProcessInfo.processInfo.systemUptime - dictationStartedAt
+      fields["sinceHoldMs"] = .double((seconds * 1000).rounded(places: 1))
+    }
+    logNow(.info, "wheel", "dictationListening", fields: fields)
+    guard let onDictationListening else { return }
+    DispatchQueue.main.async { onDictationListening(listening) }
   }
 
   /// Runs the Bluetooth bridge while the app is active and the setting is on. It outlives the

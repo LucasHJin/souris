@@ -52,8 +52,12 @@ final class AppModel {
       autoFocus: settings.autoFocus)
     self.settings = settings
     self.engine = engine
-    touchController = TouchController(
+    let touchController = TouchController(
       engine: engine, settings: settings.touch, hapticsEnabled: settings.hapticsEnabled)
+    self.touchController = touchController
+    engine.observeDictationListening { [weak touchController] listening in
+      touchController?.setDictationListening(listening)
+    }
     volumeButtons.onPress = { [engine] direction, time in
       engine.handle(scrollPress: ScrollButtonPress(direction: direction, time: time))
     }

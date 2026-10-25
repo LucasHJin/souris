@@ -186,6 +186,7 @@ public final class SourisClient: @unchecked Sendable {
     var status = ClientStatus.stopped
     var stats = LinkStats()
     var onBrowseResults: (@Sendable ([String]) -> Void)?
+    var onMacStatus: (@Sendable (MacStatus) -> Void)?
   }
 
   private static let retryDelay = Duration.seconds(1)
@@ -232,6 +233,9 @@ public final class SourisClient: @unchecked Sendable {
   private var browsedNames: [String] = []
 
   private var connection: NWConnection?
+
+  /// The Mac's latest status while connected.
+  private var macStatus = MacStatus()
 
   /// A link that reaches this client over loopback rather than one it opened over Wi-Fi.
   private enum SideLink: String, Sendable {
@@ -354,6 +358,13 @@ public final class SourisClient: @unchecked Sendable {
   public var onBrowseResults: (@Sendable ([String]) -> Void)? {
     get { shared.withLock { $0.onBrowseResults } }
     set { shared.withLock { $0.onBrowseResults = newValue } }
+  }
+
+  /// The Mac's status, such as Dictation listening. Called on `queue` when it changes, and with
+  /// an empty status when the link stops being connected.
+  public var onMacStatus: (@Sendable (MacStatus) -> Void)? {
+    get { shared.withLock { $0.onMacStatus } }
+    set { shared.withLock { $0.onMacStatus = newValue } }
   }
 
   /// The link's current status.
@@ -1003,6 +1014,8 @@ public final class SourisClient: @unchecked Sendable {
       handlePong(pong)
     case .logAck(let ack):
       logOutbox?.acknowledge(stream: ack.stream, through: ack.throughID, now: .now)
+    case .status(let packet):
+      updateMacStatus(packet.status)
     case .state, .ping, .hello, .bye, .log:
       break
     }
@@ -1299,6 +1312,16 @@ public final class SourisClient: @unchecked Sendable {
     }
     log(newStatus.isProblem ? .warning : .info, "status", fields: fields)
     onStatus(newStatus)
+    if case .connected = newStatus {
+    } else {
+      updateMacStatus([])
+    }
+  }
+
+  private func updateMacStatus(_ newStatus: MacStatus) {
+    guard newStatus != macStatus else { return }
+    macStatus = newStatus
+    shared.withLock { $0.onMacStatus }?(newStatus)
   }
 
   /// Replaces a "denied" or "failed" status with `recovered`, once the thing that failed works.

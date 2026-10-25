@@ -22,6 +22,9 @@ enum WireLayout {
   static let logRecordLengthSize = 2
   static let logAckPayloadSize = 8
 
+  /// A status packet is the `MacStatus` byte.
+  static let statusPayloadSize = 1
+
   /// A complete state packet, header included.
   static let stateSize = headerSize + statePayloadSize
 }
