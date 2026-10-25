@@ -63,7 +63,8 @@ public struct MotionPlayout: Sendable {
   public static let responsiveSlack: TimeInterval = 0.012
 
   /// A gap in the phone's samples longer than this means the phone held still and sent nothing,
-  /// seconds.
+  /// seconds, unless packets went missing in it while the cursor was moving. Bluetooth sends only
+  /// the newest state each connection event, so there a gap is the motion's own spacing.
   public static let restGap: TimeInterval = 0.03
 
   /// How fast the fastest-trip estimate may rise, seconds per second, so it follows the two
@@ -160,6 +161,9 @@ public struct MotionPlayout: Sendable {
   /// The cursor's speed over the newest sample's interval, points per second; zero after a rest.
   private var newestVelocity = SIMD2<Double>.zero
 
+  /// Whether the newest sample moved the cursor or scrolled.
+  private var isNewestMoving = false
+
   /// How long the current coast has run, seconds, and how far it has taken the cursor past the
   /// phone's own motion, points.
   private var coastTime: TimeInterval = 0
@@ -197,11 +201,15 @@ public struct MotionPlayout: Sendable {
 
   /// Adds the cumulative motion and scroll as of `phoneTime`, which arrived at `arrival`. Samples
   /// that aren't newer than the newest one are ignored.
+  ///
+  /// - Parameter missedPackets: State packets missing just before this one (see
+  ///   `InputUpdate.missedPackets`).
   public mutating func add(
     total: SIMD2<Double>,
     scroll: SIMD2<Double> = .zero,
     phoneTime: TimeInterval,
-    arrival: TimeInterval
+    arrival: TimeInterval,
+    missedPackets: Int = 0
   ) {
     let trip = arrival - phoneTime
     if let fastestTrip, let lastArrival {
@@ -216,7 +224,7 @@ public struct MotionPlayout: Sendable {
     if let newest = samples.last {
       guard phoneTime > newest.time else { return }
       let gap = phoneTime - newest.time
-      if gap > Self.restGap {
+      if gap > Self.restGap && (missedPackets == 0 || !isNewestMoving) {
         // The phone sent nothing because nothing moved, so the motion starts just before this
         // sample, not back at the previous one.
         let start = phoneTime - Self.quantile(spacing, 0.5, fallback: 0.01)
@@ -224,11 +232,13 @@ public struct MotionPlayout: Sendable {
         if let playhead, playhead >= newest.time {
           self.playhead = start
         }
-        newestVelocity = (total - newest.cursor) / (phoneTime - start)
+        // When in the gap the motion began is a guess, so no coast runs on the speed it implies.
+        newestVelocity = .zero
       } else {
         spacing.append(gap)
         newestVelocity = (total - newest.cursor) / gap
       }
+      isNewestMoving = total != newest.cursor || scroll != newest.scroll
     }
     samples.append(Sample(time: phoneTime, cursor: total, scroll: scroll))
   }
@@ -298,6 +308,7 @@ public struct MotionPlayout: Sendable {
     playhead = nil
     lastFrame = nil
     newestVelocity = .zero
+    isNewestMoving = false
     coastTime = 0
     coastOffset = .zero
   }

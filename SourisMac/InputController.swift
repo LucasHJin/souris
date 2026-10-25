@@ -229,7 +229,7 @@ final class InputController: @unchecked Sendable {
     pacedScroll.receive(update.scrollEvents)
     playout.add(
       total: receivedTotal, scroll: pacedScroll.received, phoneTime: phoneTime,
-      arrival: ProcessInfo.processInfo.systemUptime)
+      arrival: ProcessInfo.processInfo.systemUptime, missedPackets: update.missedPackets)
     if !update.buttonChanges.isEmpty {
       // A press or release lands where the phone says the cursor is, so the held motion goes
       // first. The click freeze keeps the hand still around taps, so this is rarely more than a

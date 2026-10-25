@@ -40,14 +40,20 @@ public struct InputUpdate: Equatable, Sendable {
 
   public var scrollEvents: [ScrollEvent]
 
+  /// State packets missing between the last one applied and this one: lost, or replaced by a
+  /// newer one before they went, as Bluetooth does. The motion then spans the whole gap.
+  public var missedPackets: Int
+
   public init(
     cursorDelta: SIMD2<Double> = .zero,
     buttonChanges: [ButtonChange] = [],
-    scrollEvents: [ScrollEvent] = []
+    scrollEvents: [ScrollEvent] = [],
+    missedPackets: Int = 0
   ) {
     self.cursorDelta = cursorDelta
     self.buttonChanges = buttonChanges
     self.scrollEvents = scrollEvents
+    self.missedPackets = missedPackets
   }
 
   /// True when there's nothing to post.
@@ -138,11 +144,13 @@ public struct RemoteStateTracker: Sendable {
       if epoch != nil { stats.epochChanges += 1 }
       epoch = packet.epoch
       needsBaseline = true
-    } else if !needsBaseline {
-      stats.lost += Int(seqStep) - 1
     }
 
     var update = InputUpdate()
+    if !needsBaseline {
+      update.missedPackets = Int(seqStep) - 1
+      stats.lost += update.missedPackets
+    }
     var scrollDelta: SIMD2<Double> = .zero
     if !needsBaseline {
       update.cursorDelta = state.cursor - lastCursor

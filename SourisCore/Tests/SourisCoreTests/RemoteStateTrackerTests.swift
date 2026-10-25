@@ -56,7 +56,16 @@ struct RemoteStateTrackerTests {
     _ = tracker.apply(packet(seq: 1, cursor: SIMD2(0, 0)))
     let update = try applied(&tracker, packet(seq: 4, cursor: SIMD2(30, 60)))
     #expect(update.cursorDelta == SIMD2(30, 60))
+    #expect(update.missedPackets == 2)
     #expect(tracker.stats.lost == 2)
+  }
+
+  @Test func theBaselineAfterAnEpochChangeMissesNothing() throws {
+    var tracker = RemoteStateTracker()
+    _ = tracker.apply(packet(seq: 1))
+    let update = try applied(&tracker, packet(seq: 9, epoch: 2))
+    #expect(update.missedPackets == 0)
+    #expect(try applied(&tracker, packet(seq: 10, epoch: 2)).missedPackets == 0)
   }
 
   // MARK: - Stale packets

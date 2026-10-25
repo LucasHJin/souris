@@ -200,6 +200,33 @@ import Testing
     #expect(Self.steps(coasting.frames, from: 0.3, to: 1.8).allSatisfy { $0 > -0.01 })
   }
 
+  @Test func skippedPacketsPlayOutAsMotionNotRests() {
+    // The phone builds a state every 10 ms but Bluetooth sends only the newest every 60 ms, as in
+    // the 2026-10-25 test, so five of every six never arrive. Read as rests, each gap froze the
+    // cursor and then crammed its motion into 10 ms, and coasts ran on six times the real speed.
+    var playout = MotionPlayout(pacing: .smooth, limits: .forLink(.bluetooth))
+    var frames: [(time: Double, x: Double)] = []
+    var phoneTime = 0.0
+    for frame in 0...300 {
+      let time = Double(frame) / 120
+      while phoneTime + 0.02 <= time {
+        playout.add(
+          total: SIMD2(phoneTime * Self.speed, 0), phoneTime: phoneTime,
+          arrival: phoneTime + 0.02, missedPackets: phoneTime == 0 ? 0 : 5)
+        phoneTime += 0.06
+      }
+      if let shown = playout.frame(at: time) {
+        frames.append((time, shown.cursor.x))
+      }
+    }
+    let normal = Self.speed / 120
+    let steps = Self.steps(frames, from: 0.5, to: 2.2)
+    #expect(steps.allSatisfy { abs($0 - normal) < normal * 0.25 }, "steps \(steps)")
+    #expect(
+      playout.stats.maxCoastOffset <= Self.speed * MotionPlayout.coastDamping + 0.5,
+      "coast \(playout.stats.maxCoastOffset) pt")
+  }
+
   @Test func aCoastPastAStopSettlesBackWhereThePhoneStopped() {
     // Moving at 600 pt/s until 1 s, then still: the phone sends nothing more.
     var feed = Feed()
