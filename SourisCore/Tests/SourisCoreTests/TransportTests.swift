@@ -1431,13 +1431,24 @@ struct TransportTests {
     defer { usb.cancel() }
     try await waitUntil("the cable taking over") { client.client.stats.transport == .usb }
 
-    // A Bluetooth bridge that reconnects while the cable is up is turned away.
+    // A Bluetooth bridge that reconnects while the cable is up stands by, unused.
     let again = FakeUSBMac(port: bluetoothPort)
     defer { again.cancel() }
     try await expectNever("Bluetooth replacing the cable", for: .milliseconds(500)) {
       client.client.stats.transport != .usb
     }
     #expect(again.received.values.isEmpty)
+
+    // When the cable goes, the standby takes over at once, without the bridge reconnecting.
+    usb.cancel()
+    try await waitUntil("Bluetooth taking over", timeout: .milliseconds(500)) {
+      client.client.stats.transport == .bluetooth
+    }
+    try await client.waitForStatus(.connected(macName: FakeUSBMac.macName), timeout: .seconds(1))
+    client.send(cursorX: 7)
+    try await waitUntil("a state over the standby link") {
+      again.states.contains { $0.state.cursor.x == 7 }
+    }
   }
 
   @Test func aStallOnThePhoneIsNotBlamedOnTheLink() async throws {

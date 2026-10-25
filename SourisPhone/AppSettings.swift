@@ -8,6 +8,7 @@ struct NetworkSettings: Equatable, Sendable {
   var includesPeerToPeer: Bool
   var usesVoiceServiceClass: Bool
   var usesBluetooth: Bool
+  var pausesPeerToPeerOnBluetooth: Bool
 }
 
 /// Everything the user can change, persisted as JSON in `UserDefaults`.
@@ -32,6 +33,10 @@ struct AppSettings: Codable, Equatable, Sendable {
   /// Carry the link over Bluetooth LE when the Mac connects that way, in preference to Wi-Fi.
   var usesBluetooth = true
 
+  /// Stop peer-to-peer Wi-Fi browsing while Bluetooth carries the link, which may steady
+  /// Bluetooth at the cost of a slower fall back to Wi-Fi. Off until the logs show it helps.
+  var pausesPeerToPeerOnBluetooth = false
+
   init() {}
 
   /// Decodes field by field, keeping every field that still reads and defaulting the rest, so
@@ -48,6 +53,7 @@ struct AppSettings: Codable, Equatable, Sendable {
     includesPeerToPeer = container.value(.includesPeerToPeer, default: false)
     usesVoiceServiceClass = container.value(.usesVoiceServiceClass, default: true)
     usesBluetooth = container.value(.usesBluetooth, default: true)
+    pausesPeerToPeerOnBluetooth = container.value(.pausesPeerToPeerOnBluetooth, default: false)
   }
 
   /// Where the client connects: the manual address when it parses, otherwise Bonjour.
@@ -63,7 +69,8 @@ struct AppSettings: Codable, Equatable, Sendable {
       target: target,
       includesPeerToPeer: includesPeerToPeer,
       usesVoiceServiceClass: usesVoiceServiceClass,
-      usesBluetooth: usesBluetooth)
+      usesBluetooth: usesBluetooth,
+      pausesPeerToPeerOnBluetooth: pausesPeerToPeerOnBluetooth)
   }
 }
 

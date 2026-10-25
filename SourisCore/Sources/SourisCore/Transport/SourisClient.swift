@@ -89,9 +89,11 @@ public enum LinkTransport: String, Sendable {
 ///   than waiting seconds for peer-to-peer discovery. Log packets aren't rate limited over USB.
 /// - With `listensForBluetooth`, it listens the same way on `WireProtocol.bluetoothPort` for the
 ///   phone's own `BluetoothPeripheralBridge`, which relays to the Mac over Bluetooth LE. That link
-///   replaces Wi-Fi but never the cable: while the cable carries the link, a Bluetooth connection
-///   is turned away (the bridge tries again), and so it is for 30 s after Bluetooth went silent.
-///   Log packets over Bluetooth are held to `bluetoothLogBytesPerSecond`.
+///   replaces Wi-Fi but never the cable: a Bluetooth connection that arrives while the cable
+///   carries the link stands by, and takes over the moment the cable goes. For 30 s after
+///   Bluetooth went silent it is turned away (the bridge tries again). Log packets over Bluetooth
+///   are held to `bluetoothLogBytesPerSecond`. With `pausesPeerToPeerOnBluetooth`, browsing drops
+///   peer-to-peer Wi-Fi while Bluetooth carries the link.
 /// - Silence the client itself caused doesn't count against the Mac: after `tick()` was held up
 ///   for longer than `stallThreshold` (the phone's queue was blocked), the silence clock starts
 ///   over instead of dropping the link.
@@ -162,6 +164,11 @@ public final class SourisClient: @unchecked Sendable {
     /// alone take about 10 KB/s of a link that manages a few tens.
     public var bluetoothLogBytesPerSecond: Double = 4_000
 
+    /// While Bluetooth carries the link, browse for the Mac without peer-to-peer Wi-Fi, whose
+    /// channel hopping shares the radio with Bluetooth. Falling back to Wi-Fi then has to find the
+    /// Mac again, which over peer-to-peer takes seconds.
+    public var pausesPeerToPeerOnBluetooth = false
+
     public init(deviceID: UUID, deviceName: String) {
       self.deviceID = deviceID
       self.deviceName = deviceName
@@ -218,6 +225,9 @@ public final class SourisClient: @unchecked Sendable {
 
   private var browser: NWBrowser?
   private var browserToken = 0
+
+  /// Whether the running browser includes peer-to-peer Wi-Fi.
+  private var isBrowsingPeerToPeer = false
   private var endpoints: [String: NWEndpoint] = [:]
   private var browsedNames: [String] = []
 
@@ -254,6 +264,10 @@ public final class SourisClient: @unchecked Sendable {
   private var sideLink: SideLink?
   private var sideListeners: [SideLink: SideListener] = [:]
   private var bluetoothHoldoffUntil: ContinuousClock.Instant?
+
+  /// A Bluetooth link that arrived while the cable carries the link, ready to take over.
+  private var standby: NWConnection?
+  private var standbyGeneration = 0
 
   /// When `tick()` last ran.
   private var lastTickAt: ContinuousClock.Instant?
@@ -332,6 +346,7 @@ public final class SourisClient: @unchecked Sendable {
     for side in sideListeners.values {
       side.listener?.cancel()
     }
+    standby?.cancel()
     connection?.cancel()
   }
 
@@ -419,6 +434,7 @@ public final class SourisClient: @unchecked Sendable {
       lastTickAt = nil
       stopListener(for: .usb)
       stopListener(for: .bluetooth)
+      dropStandby()
 
       let wasReady = isConnectionReady
       if let old = detachConnection() {
@@ -447,20 +463,28 @@ public final class SourisClient: @unchecked Sendable {
 
   // MARK: - Target and connection
 
-  private func makeParameters() -> NWParameters {
+  private func makeParameters(includesPeerToPeer: Bool? = nil) -> NWParameters {
     let parameters = NWParameters.udp
     parameters.serviceClass =
       configuration.usesVoiceServiceClass ? .interactiveVoice : .bestEffort
-    parameters.includePeerToPeer = configuration.includesPeerToPeer
+    parameters.includePeerToPeer = includesPeerToPeer ?? configuration.includesPeerToPeer
     parameters.prohibitedInterfaceTypes = [.cellular, .wiredEthernet]
     return parameters
+  }
+
+  /// Whether browsing should include peer-to-peer Wi-Fi on the current link.
+  private var wantsPeerToPeerBrowsing: Bool {
+    configuration.includesPeerToPeer
+      && !(configuration.pausesPeerToPeerOnBluetooth && sideLink == .bluetooth)
   }
 
   private func startBrowser() {
     browserToken += 1
     let token = browserToken
+    isBrowsingPeerToPeer = wantsPeerToPeerBrowsing
     let browser = NWBrowser(
-      for: .bonjour(type: WireProtocol.bonjourServiceType, domain: nil), using: makeParameters())
+      for: .bonjour(type: WireProtocol.bonjourServiceType, domain: nil),
+      using: makeParameters(includesPeerToPeer: isBrowsingPeerToPeer))
     browser.stateUpdateHandler = { [weak self] state in
       self?.browserStateChanged(state, token: token)
     }
@@ -469,6 +493,19 @@ public final class SourisClient: @unchecked Sendable {
     }
     self.browser = browser
     browser.start(queue: queue)
+  }
+
+  /// Restarts the browser when the link calls for a different peer-to-peer setting.
+  private func updateBrowserForLink() {
+    guard case .bonjour = configuration.target, let browser,
+      isBrowsingPeerToPeer != wantsPeerToPeerBrowsing
+    else { return }
+    browserToken += 1
+    browser.cancel()
+    self.browser = nil
+    endpoints.removeAll()
+    log(.info, "browserRestarted", fields: ["peerToPeer": .bool(wantsPeerToPeerBrowsing)])
+    startBrowser()
   }
 
   private func browserStateChanged(_ state: NWBrowser.State, token: Int) {
@@ -557,8 +594,11 @@ public final class SourisClient: @unchecked Sendable {
     begin(connection, description: endpoint.debugDescription)
   }
 
-  /// Makes `connection` the current one and starts it.
-  private func begin(_ connection: NWConnection, description: String) {
+  /// Makes `connection` the current one and starts it, or, if `isAlreadyStarted`, carries on with
+  /// it as though it had just become ready.
+  private func begin(
+    _ connection: NWConnection, description: String, isAlreadyStarted: Bool = false
+  ) {
     connectionToken += 1
     let token = connectionToken
     connection.stateUpdateHandler = { [weak self] state in
@@ -586,7 +626,15 @@ public final class SourisClient: @unchecked Sendable {
     if status == .searching {
       setStatus(.connecting, reason: "found \(description)")
     }
-    connection.start(queue: queue)
+    guard isAlreadyStarted else {
+      connection.start(queue: queue)
+      return
+    }
+    if connection.state == .ready {
+      // The standby's own receive is still waiting and hands on whatever arrives.
+      isReceiving = true
+      connectionStateChanged(.ready, token: token)
+    }
   }
 
   private func connectionStateChanged(_ state: NWConnection.State, token: Int) {
@@ -793,14 +841,13 @@ public final class SourisClient: @unchecked Sendable {
       incoming.cancel()
       return
     }
-    if side == .bluetooth && sideLink == .usb {
-      logLimited(.info, "bluetoothDeclined", "The cable carries the link; Bluetooth waits")
-      incoming.cancel()
-      return
-    }
     if side == .bluetooth, let until = bluetoothHoldoffUntil, ContinuousClock.now < until {
       logLimited(.info, "bluetoothDeclined", "Bluetooth went silent recently; staying on Wi-Fi")
       incoming.cancel()
+      return
+    }
+    if side == .bluetooth && sideLink == .usb {
+      keepStandby(incoming)
       return
     }
     log(
@@ -816,16 +863,31 @@ public final class SourisClient: @unchecked Sendable {
     sideLink = side
     setStatus(.connecting, reason: "the Mac connected over \(side.displayName)")
     begin(incoming, description: side.displayName)
+    updateBrowserForLink()
   }
 
-  /// Drops the side link and goes back to Wi-Fi straight away.
+  /// Drops the side link and goes to the standby Bluetooth link if the cable went and one is
+  /// waiting, or else back to Wi-Fi straight away.
   private func fallBack(from side: SideLink, reason: String) {
+    let toBluetooth = side == .usb && standby != nil && !isBluetoothHeldOff
     log(
-      .warning, "\(side.rawValue)Disconnected", "Falling back to Wi-Fi",
+      .warning, "\(side.rawValue)Disconnected",
+      toBluetooth ? "Falling back to Bluetooth" : "Falling back to Wi-Fi",
       fields: ["reason": .string(reason)])
     detachConnection()?.cancel()
     publishStats()
     let closed = "\(side.displayName) link closed: \(reason)"
+    if toBluetooth, let standby {
+      self.standby = nil
+      standbyGeneration += 1
+      sideLink = .bluetooth
+      setStatus(.connecting, reason: "\(closed); Bluetooth takes over")
+      begin(standby, description: SideLink.bluetooth.displayName, isAlreadyStarted: true)
+      updateBrowserForLink()
+      return
+    }
+    dropStandby()
+    updateBrowserForLink()
     switch configuration.target {
     case .bonjour:
       setStatus(.searching, reason: closed)
@@ -836,6 +898,63 @@ public final class SourisClient: @unchecked Sendable {
       setStatus(.connecting, reason: closed)
     }
     connectIfPossible()
+  }
+
+  private var isBluetoothHeldOff: Bool {
+    bluetoothHoldoffUntil.map { ContinuousClock.now < $0 } ?? false
+  }
+
+  /// Keeps a Bluetooth link that arrived while the cable carries the link, so it can take over the
+  /// moment the cable goes instead of the bridge reconnecting every 2 s to be turned away.
+  private func keepStandby(_ incoming: NWConnection) {
+    dropStandby()
+    let generation = standbyGeneration
+    standby = incoming
+    incoming.stateUpdateHandler = { [weak self] state in
+      self?.standbyStateChanged(state, connection: incoming, generation: generation)
+    }
+    log(.info, "bluetoothStandby", "The cable carries the link; Bluetooth stands by")
+    incoming.start(queue: queue)
+  }
+
+  private func dropStandby() {
+    standbyGeneration += 1
+    standby?.cancel()
+    standby = nil
+  }
+
+  private func standbyStateChanged(
+    _ state: NWConnection.State, connection: NWConnection, generation: Int
+  ) {
+    guard generation == standbyGeneration else { return }
+    switch state {
+    case .ready:
+      receiveOnStandby(connection, generation: generation)
+    case .failed, .cancelled:
+      log(.info, "bluetoothStandbyClosed", fields: state.logFields)
+      standby = nil
+    default:
+      break
+    }
+  }
+
+  /// Waits on the standby link to notice it closing. The Mac sends nothing over it until the phone
+  /// does, and once it carries the link this hands on what arrives.
+  private func receiveOnStandby(_ standby: NWConnection, generation: Int) {
+    standby.receiveMessage { [weak self] data, _, _, error in
+      guard let self else { return }
+      if standby === connection {
+        received(data, error: error, token: connectionToken)
+        return
+      }
+      guard generation == standbyGeneration else { return }
+      if error != nil || (data?.isEmpty ?? true) {
+        log(.info, "bluetoothStandbyClosed", "The Bluetooth bridge closed the standby link")
+        dropStandby()
+        return
+      }
+      receiveOnStandby(standby, generation: generation)
+    }
   }
 
   // MARK: - Receiving

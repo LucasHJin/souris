@@ -304,6 +304,7 @@ final class MouseEngine: @unchecked Sendable {
     // bridge; Wi-Fi stays the fallback.
     configuration.listensForUSB = true
     configuration.listensForBluetooth = network.usesBluetooth
+    configuration.pausesPeerToPeerOnBluetooth = network.pausesPeerToPeerOnBluetooth
 
     clientGeneration += 1
     let generation = clientGeneration
@@ -558,6 +559,7 @@ final class MouseEngine: @unchecked Sendable {
       "peerToPeer": .bool(network.includesPeerToPeer),
       "voiceClass": .bool(network.usesVoiceServiceClass),
       "bluetooth": .bool(network.usesBluetooth),
+      "pausesPeerToPeerOnBluetooth": .bool(network.pausesPeerToPeerOnBluetooth),
     ]
   }
 

@@ -230,6 +230,10 @@ struct SettingsView: View {
         }
       }
       Toggle("Peer-to-peer Wi-Fi", isOn: $model.settings.includesPeerToPeer)
+      if model.settings.usesBluetooth && model.settings.includesPeerToPeer {
+        Toggle(
+          "Pause peer-to-peer on Bluetooth", isOn: $model.settings.pausesPeerToPeerOnBluetooth)
+      }
       Toggle("Wi-Fi voice priority", isOn: $model.settings.usesVoiceServiceClass)
     } header: {
       Text("Network")
@@ -238,8 +242,9 @@ struct SettingsView: View {
         "Without the cable, Bluetooth gives steadier timing than busy Wi-Fi; turn it off if "
           + "Wi-Fi works better where you are. It needs Use Bluetooth on in the Mac menu too. "
           + "Peer-to-peer is only for networks that stop devices seeing each other. Also turn it "
-          + "on in the Mac menu. It adds latency. Voice priority sends packets in the Wi-Fi "
-          + "voice queue.")
+          + "on in the Mac menu. It adds latency, and its searching shares the radio with "
+          + "Bluetooth: pausing it on Bluetooth may steady Bluetooth, but falling back to Wi-Fi "
+          + "then takes a few seconds. Voice priority sends packets in the Wi-Fi voice queue.")
     }
   }
 
