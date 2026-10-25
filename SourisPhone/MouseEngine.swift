@@ -62,6 +62,11 @@ final class MouseEngine: @unchecked Sendable {
   private var statsBaselineTime: TimeInterval = 0
   private var thermalState = ProcessInfo.processInfo.thermalState
 
+  /// When a finger last touched the scroll wheel and when its hold last started dictation, for
+  /// timing the hold in the log.
+  private var wheelTouchedAt: TimeInterval?
+  private var dictationStartedAt: TimeInterval?
+
   // Lazy so the callbacks can capture `self`; first touched from `queue`.
   private lazy var arTracker = ARTracker(
     queue: queue,
@@ -153,8 +158,16 @@ final class MouseEngine: @unchecked Sendable {
       for event in wheelEvents {
         recorder?.record(.wheel(event))
         pipeline.handle(event)
-        if case .touch(let isDown, _) = event {
+        switch event {
+        case .touch(let isDown, let time):
           logNow(.debug, "wheel", isDown ? "down" : "up")
+          if isDown {
+            wheelTouchedAt = time
+          }
+        case .dictation(let isOn, let time):
+          logDictation(isOn: isOn, at: time)
+        case .turn, .stop:
+          break
         }
       }
       drainPipelineEvents()
@@ -445,6 +458,29 @@ final class MouseEngine: @unchecked Sendable {
       .log(
         LogEntry(
           level: level, category: category, event: event, message: message, fields: fields)))
+  }
+
+  /// Times a dictation start or stop: how long the finger held before it started (`heldMs`),
+  /// how long it ran (`durationMs`), and how long the event took to reach this queue (`lagMs`).
+  /// The Mac logs the rest of the way, to the microphone starting.
+  private func logDictation(isOn: Bool, at time: TimeInterval) {
+    func milliseconds(_ seconds: TimeInterval) -> LogValue {
+      .double((seconds * 1000).rounded(places: 1))
+    }
+    var fields: [String: LogValue] = [
+      "on": .bool(isOn),
+      "lagMs": milliseconds(ProcessInfo.processInfo.systemUptime - time),
+    ]
+    if isOn {
+      dictationStartedAt = time
+      if let wheelTouchedAt {
+        fields["heldMs"] = milliseconds(time - wheelTouchedAt)
+      }
+    } else if let dictationStartedAt {
+      fields["durationMs"] = milliseconds(time - dictationStartedAt)
+      self.dictationStartedAt = nil
+    }
+    logNow(.info, "wheel", "dictation", fields: fields)
   }
 
   /// The watchdog's report of a stall, logged once the queue runs again.

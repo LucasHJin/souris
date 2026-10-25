@@ -40,6 +40,9 @@ final class InputController: @unchecked Sendable {
   /// the release.
   private static let modifierCheckDelay: TimeInterval = 0.1
 
+  /// A microphone change this soon after a dictation press is timed against it.
+  private static let dictationWindow: TimeInterval = 10
+
   /// One second of arrivals, summarized in the `input` log entry.
   private struct ReceiveWindow {
     var packets = 0
@@ -82,6 +85,14 @@ final class InputController: @unchecked Sendable {
   private var postedTotal = SIMD2<Double>.zero
   private var pacedScroll = PacedScroll()
 
+  /// Times Dictation from its shortcut to the microphone starting or stopping.
+  private lazy var microphones = MicrophoneWatcher(queue: queue) { [weak self] change in
+    self?.logMicrophone(change)
+  }
+
+  /// The last dictation shortcut press: whether it started dictation, and when.
+  private var lastDictationPress: (isOn: Bool, time: TimeInterval)?
+
   init(
     clickInterval: TimeInterval,
     displayLayout: DisplayLayout,
@@ -92,6 +103,7 @@ final class InputController: @unchecked Sendable {
     preferredPacing = pacing
     playout = MotionPlayout(pacing: pacing.resolved(for: .wifi), limits: .forLink(.wifi))
     self.log = log
+    queue.async { [self] in microphones.start() }
   }
 
   /// The latest packet counters. Safe to call from any thread.
@@ -120,7 +132,7 @@ final class InputController: @unchecked Sendable {
         post(update, phoneTime: Double(packet.phoneTimeMicros) / 1_000_000)
         press(update.shortcuts)
         if let isOn = update.dictation {
-          toggleDictation(isOn)
+          toggleDictation(isOn, linkDelayMs: receive.delays.last)
         }
       }
       countPacket()
@@ -273,10 +285,40 @@ final class InputController: @unchecked Sendable {
 
   /// Presses the dictation shortcut, which macOS's Dictation toggles on, so the same press
   /// starts and stops it.
-  private func toggleDictation(_ isOn: Bool) {
+  ///
+  /// - Parameter linkDelayMs: How much longer than the session's fastest packet the one that
+  ///   asked for this took to arrive, when a packet asked.
+  private func toggleDictation(_ isOn: Bool, linkDelayMs: Double? = nil) {
     shortcutPoster.post(ShortcutPoster.dictation)
-    log.log(.info, "input", "dictation", isOn ? "Started dictation" : "Stopped dictation", [:])
+    lastDictationPress = (isOn, ProcessInfo.processInfo.systemUptime)
+    var fields: [String: LogValue] = [:]
+    let recording = microphones.recordingApps
+    if !recording.isEmpty {
+      fields["alreadyRecording"] = .string(recording.joined(separator: ","))
+    }
+    if let linkDelayMs {
+      fields["linkDelayMs"] = .double((linkDelayMs * 10).rounded() / 10)
+    }
+    log.log(
+      .info, "input", "dictation", isOn ? "Started dictation" : "Stopped dictation", fields)
     checkModifiersReleased(after: "dictation")
+  }
+
+  /// Logs an app starting or stopping recording, with how long after the last dictation press
+  /// it came: for Dictation's own app, how long Dictation took to start or stop listening.
+  private func logMicrophone(_ change: MicrophoneWatcher.Change) {
+    var fields: [String: LogValue] = [
+      "app": .string(change.app),
+      "recording": .bool(change.isRecording),
+    ]
+    if let press = lastDictationPress {
+      let elapsed = ProcessInfo.processInfo.systemUptime - press.time
+      if elapsed < Self.dictationWindow {
+        fields["sinceDictationMs"] = .double((elapsed * 10_000).rounded() / 10)
+        fields["dictationOn"] = .bool(press.isOn)
+      }
+    }
+    log.log(.info, "input", "microphone", nil, fields)
   }
 
   /// Posts the motion and scrolling from what has been posted so far to `frame`.
