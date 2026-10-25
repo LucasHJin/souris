@@ -66,8 +66,8 @@ struct PacketCodingTests {
     #expect(try Packet.decode(packet.encoded()) == packet)
   }
 
-  @Test func statePacketIs58Bytes() {
-    #expect(Packet.state(Self.sampleState).encoded().count == 58)
+  @Test func statePacketIs59Bytes() {
+    #expect(Packet.state(Self.sampleState).encoded().count == 59)
   }
 
   @Test func aStatePacketFromBeforeShortcutsDecodesWithNoPresses() throws {
@@ -83,13 +83,13 @@ struct PacketCodingTests {
 
   @Test func shortcutCountsFromANewerPhoneAreKeptOrDropped() throws {
     var bytes = Array(Packet.state(Self.sampleState).encoded().prefix(52))
-    // Six counts, one more than this build knows.
-    bytes += [6, 1, 2, 3, 4, 5, 6]
+    // Seven counts, one more than this build knows.
+    bytes += [7, 1, 2, 3, 4, 5, 6, 7]
     guard case .state(let decoded) = try Packet.decode(Data(bytes)) else {
       Issue.record("Expected a state packet")
       return
     }
-    #expect(decoded.state.shortcuts.counts == [1, 2, 3, 4, 5])
+    #expect(decoded.state.shortcuts.counts == [1, 2, 3, 4, 5, 6])
   }
 
   @Test func shortcutPressesCountTheWrappingDifference() {
@@ -155,9 +155,9 @@ struct PacketCodingTests {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xC0,  // cursorY = -2.25
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40,  // scrollY = 3.0
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xE0, 0xBF,  // scrollX = -0.5
-      0x05,  // shortcut count
+      0x06,  // shortcut count
       0x02, 0x00, 0x00, 0xFF,  // Mission Control, App windows, Show desktop, Spotlight presses
-      0x00,  // Return presses
+      0x00, 0x00,  // Return and Delete presses
     ]
     #expect(Array(Packet.state(Self.sampleState).encoded()) == golden)
   }

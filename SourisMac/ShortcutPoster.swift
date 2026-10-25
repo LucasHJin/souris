@@ -3,8 +3,8 @@ import CoreGraphics
 
 import SourisCore
 
-/// Presses the Mac's own keyboard shortcuts for what the phone asks for, and Return for its Enter
-/// key.
+/// Presses the Mac's own keyboard shortcuts for what the phone asks for, and Return and Delete for
+/// its Enter and Delete keys.
 ///
 /// The shortcuts' keys come from System Settings → Keyboard → Keyboard Shortcuts, read afresh for each
 /// press from the `com.apple.symbolichotkeys` defaults, which list only shortcuts someone has
@@ -31,8 +31,12 @@ final class ShortcutPoster {
   /// switches input sources. Spotlight never passes it to Dictation.
   static let dictation = KeyCombo(keyCode: 0x02, flags: [.maskControl, .maskAlternate])
 
-  /// Return, with no modifiers whatever is held on the keyboard.
-  private static let returnKey = KeyCombo(keyCode: 0x24, flags: [])
+  /// The keys the phone's Enter and Delete keys press, Return and Delete, with no modifiers
+  /// whatever is held on the keyboard.
+  private static let plainKeys: [MacShortcut: KeyCombo] = [
+    .returnKey: KeyCombo(keyCode: 0x24, flags: []),
+    .deleteKey: KeyCombo(keyCode: 0x33, flags: []),
+  ]
 
   /// The keyboard's 🎤 key (F5 on the M1 Pro) as macOS sees it. Unlike ⌃⌥D it reaches Dictation
   /// in Spotlight too: the Siri process takes it and, for a press shorter than its 0.42 s hold
@@ -55,9 +59,9 @@ final class ShortcutPoster {
   private let source = CGEventSource(stateID: .hidSystemState)
 
   func press(_ shortcut: MacShortcut) -> Outcome {
-    if shortcut == .returnKey {
-      post(Self.returnKey)
-      return .pressed(Self.returnKey)
+    if let combo = Self.plainKeys[shortcut] {
+      post(combo)
+      return .pressed(combo)
     }
     if let combo = Self.keys(for: shortcut) {
       post(combo)
@@ -78,7 +82,7 @@ final class ShortcutPoster {
       guard let combo = Self.defaultHotKey(for: shortcut)?.keys else { return .disabled }
       post(combo)
       return .pressed(combo)
-    case .showDesktop, .returnKey:
+    case .showDesktop, .returnKey, .deleteKey:
       return .disabled
     }
   }
@@ -124,8 +128,8 @@ final class ShortcutPoster {
   // MARK: - System shortcuts
 
   /// macOS's id for the shortcut in `AppleSymbolicHotKeys`, and its keys until someone changes
-  /// them. Arrow and function keys carry the Fn flag, as a real keyboard's do. Nil for Return,
-  /// which is no shortcut.
+  /// them. Arrow and function keys carry the Fn flag, as a real keyboard's do. Nil for Return and
+  /// Delete, which are no shortcuts.
   private static func defaultHotKey(for shortcut: MacShortcut) -> (id: Int, keys: KeyCombo)? {
     switch shortcut {
     case .missionControl:
@@ -136,7 +140,7 @@ final class ShortcutPoster {
       (36, KeyCombo(keyCode: 0x67, flags: [.maskSecondaryFn]))  // F11
     case .spotlight:
       (64, KeyCombo(keyCode: 0x31, flags: [.maskCommand]))  // ⌘Space
-    case .returnKey:
+    case .returnKey, .deleteKey:
       nil
     }
   }

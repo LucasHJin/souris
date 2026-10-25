@@ -6,7 +6,7 @@ import Testing
 
 /// The classifier uses a 0.125 s minimum press, so every expected time is exact in binary floating
 /// point. The surface is 400 × 800 with the touch area in its top half, split at x = 200, and the
-/// Enter key in the left half from y = 320 to 480.
+/// Enter and Delete keys in the left and right halves from y = 320 to 480.
 struct TouchClassifierTests {
   let surface = CGSize(width: 400, height: 800)
   let left = CGPoint(x: 100, y: 100)
@@ -245,9 +245,10 @@ struct TouchClassifierTests {
         .contact(time: 0.0625), .button(.left, isDown: false, time: 0.0625),
       ])
 
-    // The accepted area is read on each touch: y = 300 is now below the top quarter. (The left
-    // button reaches down to the Enter key whatever the area is, so this uses the right.)
+    // The accepted area is read on each touch: y = 300 is now below the top quarter. (A button
+    // reaches down to its key whatever the area is, so this turns Delete off.)
     classifier.settings.acceptedFraction = 0.25
+    classifier.settings.keys.isDeleteEnabled = false
     let lowered = CGPoint(x: 300, y: 300)
     #expect(classifier.touchBegan(id: 2, location: lowered, in: surface, time: 1.0) == [])
     #expect(
@@ -265,14 +266,15 @@ struct TouchClassifierTests {
 
     let began = classifier.touchBegan(id: 1, location: enterKey, in: surface, time: 0)
     #expect(began == [.contact(time: 0)])
-    #expect(classifier.isReturnKeyTouched)
+    #expect(classifier.touchedKeys == [.returnKey])
     #expect(classifier.heldButtons == noButtons)
+    #expect(classifier.nextDeadline == nil)
 
     #expect(
       classifier.touchEnded(id: 1, time: 0.25) == [
-        .contact(time: 0.25), .returnKey(heldFor: 0.25, time: 0.25),
+        .contact(time: 0.25), .key(.returnKey, heldFor: 0.25, isRepeat: false, time: 0.25),
       ])
-    #expect(!classifier.isReturnKeyTouched)
+    #expect(classifier.touchedKeys.isEmpty)
   }
 
   @Test func aTouchRestingOnTheEnterKeyPressesNothing() {
@@ -281,7 +283,7 @@ struct TouchClassifierTests {
     #expect(classifier.touchEnded(id: 1, time: 0.625) == [.contact(time: 0.625)])
   }
 
-  @Test func theLeftButtonEndsWhereTheEnterKeyStarts() {
+  @Test func eachButtonEndsWhereItsKeyStarts() {
     var classifier = makeClassifier()
     let leftDown = classifier.touchBegan(
       id: 1, location: CGPoint(x: 100, y: 319), in: surface, time: 0)
@@ -292,15 +294,20 @@ struct TouchClassifierTests {
     // Below the key is the palm's.
     #expect(
       classifier.touchBegan(id: 3, location: CGPoint(x: 100, y: 481), in: surface, time: 0) == [])
-    // The right button keeps the top half.
     let rightDown = classifier.touchBegan(
-      id: 4, location: CGPoint(x: 300, y: 399), in: surface, time: 0)
+      id: 4, location: CGPoint(x: 300, y: 319), in: surface, time: 0)
     #expect(rightDown == [.contact(time: 0), .button(.right, isDown: true, time: 0)])
+    let onDelete = classifier.touchBegan(
+      id: 5, location: CGPoint(x: 300, y: 321), in: surface, time: 0)
+    #expect(onDelete == [.contact(time: 0)])
+    #expect(classifier.touchedKeys == [.returnKey, .deleteKey])
     #expect(
-      classifier.touchBegan(id: 5, location: CGPoint(x: 300, y: 401), in: surface, time: 0) == [])
-    // Nor does the side band take touches on the key.
+      classifier.touchBegan(id: 6, location: CGPoint(x: 300, y: 481), in: surface, time: 0) == [])
+    // Nor do the side bands take touches on the keys.
     #expect(
-      classifier.touchBegan(id: 6, location: CGPoint(x: 2, y: 400), in: surface, time: 0) == [])
+      classifier.touchBegan(id: 7, location: CGPoint(x: 2, y: 400), in: surface, time: 0) == [])
+    #expect(
+      classifier.touchBegan(id: 8, location: CGPoint(x: 398, y: 400), in: surface, time: 0) == [])
   }
 
   @Test func aDragFromTheLeftButtonOntoTheEnterKeyStaysADrag() {
@@ -315,8 +322,8 @@ struct TouchClassifierTests {
 
   @Test func withTheEnterKeyOffTheLeftButtonFillsTheTopHalf() {
     var classifier = makeClassifier()
-    classifier.settings.returnKey.isEnabled = false
-    #expect(classifier.returnKeyRect(in: surface) == nil)
+    classifier.settings.keys.isReturnEnabled = false
+    #expect(classifier.keyRect(.returnKey, in: surface) == nil)
     let low = classifier.touchBegan(id: 1, location: CGPoint(x: 100, y: 399), in: surface, time: 0)
     #expect(low == [.contact(time: 0), .button(.left, isDown: true, time: 0)])
     #expect(classifier.touchBegan(id: 2, location: enterKey, in: surface, time: 0) == [])
@@ -329,7 +336,7 @@ struct TouchClassifierTests {
     #expect(classifier.touchEnded(id: 2, time: 0.125) == [])
     #expect(
       classifier.touchEnded(id: 1, time: 0.25) == [
-        .contact(time: 0.25), .returnKey(heldFor: 0.25, time: 0.25),
+        .contact(time: 0.25), .key(.returnKey, heldFor: 0.25, isRepeat: false, time: 0.25),
       ])
   }
 
@@ -337,16 +344,112 @@ struct TouchClassifierTests {
     var classifier = makeClassifier()
     _ = classifier.touchBegan(id: 1, location: enterKey, in: surface, time: 0)
     #expect(classifier.cancelAll(time: 0.125) == [])
-    #expect(!classifier.isReturnKeyTouched)
+    #expect(classifier.touchedKeys.isEmpty)
     #expect(classifier.touchEnded(id: 1, time: 0.25) == [])
   }
 
-  @Test func oldSettingsWithoutAnEnterKeyGetTheDefaultOne() throws {
-    let saved = Data(#"{"acceptedFraction":0.5,"returnKey":{"top":0.35}}"#.utf8)
+  @Test func oldSettingsWithoutTheKeysGetTheDefaultOnes() throws {
+    let saved = Data(#"{"acceptedFraction":0.5,"keys":{"top":0.35}}"#.utf8)
     let settings = try JSONDecoder().decode(TouchSettings.self, from: saved)
-    #expect(settings.returnKey.top == 0.35)
-    #expect(settings.returnKey.bottom == ReturnKeySettings().bottom)
+    #expect(settings.keys.top == 0.35)
+    #expect(settings.keys.bottom == KeySettings().bottom)
+    #expect(settings.keys.repeatDelay == KeySettings().repeatDelay)
     let older = try JSONDecoder().decode(TouchSettings.self, from: Data("{}".utf8))
-    #expect(older.returnKey == ReturnKeySettings())
+    #expect(older.keys == KeySettings())
+  }
+
+  // MARK: - Delete key
+
+  let deleteKey = CGPoint(x: 300, y: 400)
+
+  /// Repeats half a second after landing and every eighth of a second after that.
+  func makeRepeatingClassifier() -> TouchClassifier {
+    var classifier = makeClassifier()
+    classifier.settings.keys.repeatDelay = 0.5
+    classifier.settings.keys.repeatInterval = 0.125
+    return classifier
+  }
+
+  @Test func aDeleteKeyTapPressesDeleteWhenItLifts() {
+    var classifier = makeRepeatingClassifier()
+
+    let began = classifier.touchBegan(id: 1, location: deleteKey, in: surface, time: 0)
+    #expect(began == [.contact(time: 0)])
+    #expect(classifier.touchedKeys == [.deleteKey])
+    #expect(classifier.heldButtons == noButtons)
+    #expect(classifier.nextDeadline == 0.5)
+
+    #expect(
+      classifier.touchEnded(id: 1, time: 0.25) == [
+        .contact(time: 0.25), .key(.deleteKey, heldFor: 0.25, isRepeat: false, time: 0.25),
+      ])
+    #expect(classifier.touchedKeys.isEmpty)
+    #expect(classifier.nextDeadline == nil)
+  }
+
+  @Test func holdingDeleteRepeatsUntilItLifts() {
+    var classifier = makeRepeatingClassifier()
+    _ = classifier.touchBegan(id: 1, location: deleteKey, in: surface, time: 0)
+
+    #expect(classifier.advance(to: 0.25) == [])
+    #expect(
+      classifier.advance(to: 0.5) == [.key(.deleteKey, heldFor: 0.5, isRepeat: true, time: 0.5)])
+    #expect(classifier.nextDeadline == 0.625)
+    #expect(
+      classifier.advance(to: 0.875) == [
+        .key(.deleteKey, heldFor: 0.625, isRepeat: true, time: 0.625),
+        .key(.deleteKey, heldFor: 0.75, isRepeat: true, time: 0.75),
+        .key(.deleteKey, heldFor: 0.875, isRepeat: true, time: 0.875),
+      ])
+
+    // A hold that has repeated presses nothing more when it lifts.
+    #expect(classifier.touchEnded(id: 1, time: 0.9375) == [.contact(time: 0.9375)])
+    #expect(classifier.nextDeadline == nil)
+  }
+
+  @Test func deleteRepeatsAndButtonReleasesComeInTimeOrder() {
+    var classifier = makeRepeatingClassifier()
+    _ = classifier.touchBegan(id: 1, location: deleteKey, in: surface, time: 0)
+
+    #expect(
+      classifier.touchBegan(id: 2, location: left, in: surface, time: 0.5625) == [
+        .key(.deleteKey, heldFor: 0.5, isRepeat: true, time: 0.5),
+        .contact(time: 0.5625),
+        .button(.left, isDown: true, time: 0.5625),
+      ])
+    #expect(classifier.touchEnded(id: 2, time: 0.5625) == [.contact(time: 0.5625)])
+    #expect(
+      classifier.advance(to: 0.75) == [
+        .key(.deleteKey, heldFor: 0.625, isRepeat: true, time: 0.625),
+        .button(.left, isDown: false, time: 0.6875),
+        .key(.deleteKey, heldFor: 0.75, isRepeat: true, time: 0.75),
+      ])
+  }
+
+  @Test func deleteRepeatsAreNeverCloserThanTenMilliseconds() {
+    var classifier = makeRepeatingClassifier()
+    classifier.settings.keys.repeatInterval = 0
+    _ = classifier.touchBegan(id: 1, location: deleteKey, in: surface, time: 0)
+    // Due at 0.5, 0.51, 0.52, 0.53 and 0.54.
+    #expect(classifier.advance(to: 0.545).count == 5)
+  }
+
+  @Test func cancellingStopsDeleteRepeating() {
+    var classifier = makeRepeatingClassifier()
+    _ = classifier.touchBegan(id: 1, location: deleteKey, in: surface, time: 0)
+    #expect(classifier.cancelAll(time: 0.25) == [])
+    #expect(classifier.nextDeadline == nil)
+    #expect(classifier.advance(to: 1) == [])
+    #expect(classifier.touchEnded(id: 1, time: 1) == [])
+  }
+
+  @Test func withTheDeleteKeyOffTheRightButtonFillsTheTopHalf() {
+    var classifier = makeClassifier()
+    classifier.settings.keys.isDeleteEnabled = false
+    #expect(classifier.keyRect(.deleteKey, in: surface) == nil)
+    #expect(classifier.keyRect(.returnKey, in: surface) != nil)
+    let low = classifier.touchBegan(id: 1, location: CGPoint(x: 300, y: 399), in: surface, time: 0)
+    #expect(low == [.contact(time: 0), .button(.right, isDown: true, time: 0)])
+    #expect(classifier.touchBegan(id: 2, location: deleteKey, in: surface, time: 0) == [])
   }
 }

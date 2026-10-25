@@ -65,6 +65,9 @@ public enum MacShortcut: Int, CaseIterable, Codable, Sendable {
   /// The Return key, from the phone's Enter key.
   case returnKey
 
+  /// The Delete (backspace) key, from the phone's Delete key.
+  case deleteKey
+
   /// The name in logs, e.g. `missionControl`.
   public var logName: String {
     switch self {
@@ -73,6 +76,7 @@ public enum MacShortcut: Int, CaseIterable, Codable, Sendable {
     case .showDesktop: "showDesktop"
     case .spotlight: "spotlight"
     case .returnKey: "returnKey"
+    case .deleteKey: "deleteKey"
     }
   }
 }

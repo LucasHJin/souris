@@ -442,14 +442,19 @@ import simd
     #expect(steps.last?.state.shortcuts == ShortcutPresses(counts: [0, 1, 0, 0]))
   }
 
-  @Test func anEnterKeyTapPressesReturnOnceUnlessPaused() {
+  @Test func keyPressesPressTheirKeysUnlessPaused() {
     var session = SyntheticSession(duration: 4)
-    session.touch(.returnKey(heldFor: 0.1, time: 1))
+    session.touch(.key(.returnKey, heldFor: 0.1, isRepeat: false, time: 1))
+    session.touch(.key(.deleteKey, heldFor: 0.5, isRepeat: true, time: 1.25))
+    session.touch(.key(.deleteKey, heldFor: 0.55, isRepeat: true, time: 1.3))
     session.pause(true, at: 2)
-    session.touch(.returnKey(heldFor: 0.1, time: 2.5))
+    session.touch(.key(.returnKey, heldFor: 0.1, isRepeat: false, time: 2.5))
+    session.touch(.key(.deleteKey, heldFor: 0.1, isRepeat: false, time: 2.75))
     let steps = session.replay(Self.shortcutSettings)
     #expect(steps.step(at: 1.5).state.shortcuts[.returnKey] == 1)
+    #expect(steps.step(at: 1.5).state.shortcuts[.deleteKey] == 2)
     #expect(steps.last?.state.shortcuts[.returnKey] == 1)
+    #expect(steps.last?.state.shortcuts[.deleteKey] == 2)
     #expect(steps.last?.state.shortcuts[.missionControl] == 0)
   }
 }

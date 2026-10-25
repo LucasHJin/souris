@@ -17,7 +17,7 @@ struct SettingsView: View {
         wheelSection
         tiltScrollSection
         clicksSection
-        returnKeySection
+        keysSection
         liftSection
         connectionSection
         networkSection
@@ -278,15 +278,16 @@ struct SettingsView: View {
     }
   }
 
-  // MARK: - Enter key
+  // MARK: - Enter and Delete keys
 
-  private var returnKeySection: some View {
+  private var keysSection: some View {
     Section {
-      Toggle("Enter key", isOn: $model.settings.touch.returnKey.isEnabled)
+      Toggle("Enter key", isOn: $model.settings.touch.keys.isReturnEnabled)
+      Toggle("Delete key", isOn: $model.settings.touch.keys.isDeleteEnabled)
       Group {
         SliderRow(
           title: "Starts at",
-          value: $model.settings.touch.returnKey.top,
+          value: $model.settings.touch.keys.top,
           range: 0.2...0.6,
           step: 0.01,
           displayFactor: 100,
@@ -294,30 +295,55 @@ struct SettingsView: View {
           unit: "% down")
         SliderRow(
           title: "Ends at",
-          value: $model.settings.touch.returnKey.bottom,
+          value: $model.settings.touch.keys.bottom,
           range: 0.3...0.8,
           step: 0.01,
           displayFactor: 100,
           fractionDigits: 0,
           unit: "% down")
+      }
+      .disabled(!keys.isReturnEnabled && !keys.isDeleteEnabled)
+      SliderRow(
+        title: "Longest Enter tap",
+        value: $model.settings.touch.keys.maxTapDuration,
+        range: 0.2...1,
+        step: 0.05,
+        displayFactor: 1000,
+        fractionDigits: 0,
+        unit: " ms")
+        .disabled(!keys.isReturnEnabled)
+      Group {
         SliderRow(
-          title: "Longest tap",
-          value: $model.settings.touch.returnKey.maxTapDuration,
+          title: "Delete repeats after",
+          value: $model.settings.touch.keys.repeatDelay,
           range: 0.2...1,
           step: 0.05,
           displayFactor: 1000,
           fractionDigits: 0,
           unit: " ms")
+        SliderRow(
+          title: "Then every",
+          value: $model.settings.touch.keys.repeatInterval,
+          range: 0.02...0.15,
+          step: 0.005,
+          displayFactor: 1000,
+          fractionDigits: 0,
+          unit: " ms")
       }
-      .disabled(!model.settings.touch.returnKey.isEnabled)
+      .disabled(!keys.isDeleteEnabled)
     } header: {
-      Text("Enter key")
+      Text("Enter and Delete keys")
     } footer: {
       Text(
-        "Tap below the left button, where the return arrow is, to press Return on the Mac. It "
-          + "presses when you lift, with a firm tap, and only for a tap: a longer touch, like a "
-          + "resting palm, does nothing. The left button ends where the key starts.")
+        "Below the left button, where the return arrow is, a tap presses Return on the Mac when you "
+          + "lift, with a firm tap. Only a tap counts: a longer touch, like a resting palm, does "
+          + "nothing. Below the right button, a tap presses Delete the same way, and holding it "
+          + "keeps deleting, with a tick each time. Each button ends where its key starts.")
     }
+  }
+
+  private var keys: KeySettings {
+    model.settings.touch.keys
   }
 
   // MARK: - Lift

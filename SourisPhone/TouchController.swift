@@ -10,10 +10,10 @@ import SourisCore
 ///
 /// A touch that begins on the wheel rolls it instead of pressing a button, a tap on it is a
 /// middle click, and holding it still dictates on the Mac until it lifts: a firm tap says the
-/// Mac's Dictation is listening, a light one that the hold ended. A tap on the Enter key presses
-/// Return on the Mac with a firm tap. While the wheel is touched,
-/// spinning or letting out its scrolling, a display link advances it every refresh, and each
-/// notch it passes plays a haptic tick.
+/// Mac's Dictation is listening, a light one that the hold ended. A tap on the Enter or Delete key
+/// presses Return or Delete on the Mac with a firm tap, and each repeat of a held Delete plays a
+/// tick. While the wheel is touched, spinning or letting out its scrolling, a display link
+/// advances it every refresh, and each notch it passes plays a haptic tick.
 ///
 /// UIKit touch timestamps and `ProcessInfo.systemUptime` share a clock, so the classifier's
 /// deadlines are scheduled directly on the main queue.
@@ -25,8 +25,8 @@ final class TouchController {
   /// The buttons the classifier reports as held, for the press feedback on screen.
   private(set) var heldButtons: MouseButtons = []
 
-  /// Whether a finger is on the Enter key, for its feedback on screen.
-  private(set) var isReturnKeyTouched = false
+  /// The keys a finger is on, for their feedback on screen.
+  private(set) var touchedKeys: Set<TouchKey> = []
 
   /// The wheel's turn in notches, whether a finger is on it, whether it is dictating and whether
   /// the Mac's Dictation listens to that, for drawing it.
@@ -44,7 +44,7 @@ final class TouchController {
   @ObservationIgnored private let engine: MouseEngine
   @ObservationIgnored private let haptic = UIImpactFeedbackGenerator(style: .light)
   @ObservationIgnored private let tickHaptic = UIImpactFeedbackGenerator(style: .rigid)
-  /// For Dictation listening and the Enter key.
+  /// For Dictation listening and the keys.
   @ObservationIgnored private let firmHaptic = UIImpactFeedbackGenerator(style: .medium)
   @ObservationIgnored private var lastTickAt: TimeInterval = 0
   @ObservationIgnored private var frameTicker: FrameTicker?
@@ -90,8 +90,9 @@ final class TouchController {
         continue
       }
       if hapticsEnabled {
-        if classifier.isOnReturnKey(location, in: size) {
+        if classifier.key(at: location, in: size) != nil {
           firmHaptic.prepare()
+          tickHaptic.prepare()
         } else if location.y < size.height * classifier.settings.acceptedFraction {
           haptic.prepare()
         }
@@ -152,7 +153,8 @@ final class TouchController {
       for event in events {
         switch event {
         case .button(_, true, _): haptic.impactOccurred()
-        case .returnKey: firmHaptic.impactOccurred(intensity: 1)
+        case .key(_, _, false, _): firmHaptic.impactOccurred(intensity: 1)
+        case .key: playTick()
         case .button, .contact: break
         }
       }
@@ -166,8 +168,8 @@ final class TouchController {
     if held != heldButtons {
       heldButtons = held
     }
-    if classifier.isReturnKeyTouched != isReturnKeyTouched {
-      isReturnKeyTouched = classifier.isReturnKeyTouched
+    if classifier.touchedKeys != touchedKeys {
+      touchedKeys = classifier.touchedKeys
     }
 
     pendingAdvance?.cancel()

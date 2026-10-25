@@ -17,8 +17,8 @@ public struct TouchSettings: Codable, Equatable, Sendable {
   /// The scroll wheel between the two buttons.
   public var wheel = ScrollWheelSettings()
 
-  /// The Enter key below the left button.
-  public var returnKey = ReturnKeySettings()
+  /// The Enter and Delete keys below the buttons.
+  public var keys = KeySettings()
 
   public init() {}
 
@@ -32,60 +32,74 @@ public struct TouchSettings: Codable, Equatable, Sendable {
       .minimumPressDuration, default: defaults.minimumPressDuration)
     wheel = (try? container.decodeIfPresent(ScrollWheelSettings.self, forKey: .wheel))
       ?? defaults.wheel
-    returnKey = (try? container.decodeIfPresent(ReturnKeySettings.self, forKey: .returnKey))
-      ?? defaults.returnKey
+    keys = (try? container.decodeIfPresent(KeySettings.self, forKey: .keys)) ?? defaults.keys
   }
 }
 
-/// Tunables for the Enter key: the bottom of the left half's touch area, below the left button,
-/// where a tap presses Return on the Mac.
-public struct ReturnKeySettings: Codable, Equatable, Sendable {
-  public var isEnabled = true
+/// Tunables for the keys below the buttons: Enter in the left half, where a tap presses Return on
+/// the Mac, and Delete in the right half, where a tap presses Delete and a hold keeps deleting.
+public struct KeySettings: Codable, Equatable, Sendable {
+  public var isReturnEnabled = true
+  public var isDeleteEnabled = true
 
-  /// Where the key starts and ends, as fractions of the surface's height from the top. The left
-  /// button ends where it starts; the right button keeps the top `acceptedFraction`. The key
-  /// reaches below that, into what is otherwise the palm's area.
+  /// Where the keys start and end, as fractions of the surface's height from the top. A button
+  /// with its key on ends where the key starts. The keys reach below `acceptedFraction`, into what
+  /// is otherwise the palm's area.
   public var top: Double = 0.4
   public var bottom: Double = 0.6
 
-  /// The longest touch that counts as a tap, seconds. A longer one is a resting palm or thumb and
-  /// presses nothing.
+  /// The longest touch on Enter that counts as a tap, seconds. A longer one is a resting palm or
+  /// thumb and presses nothing.
   public var maxTapDuration: TimeInterval = 0.5
+
+  /// How long Delete is held before it presses again, and the time between its repeats after
+  /// that, seconds. Lifting before the first repeat presses it once.
+  public var repeatDelay: TimeInterval = 0.4
+  public var repeatInterval: TimeInterval = 1.0 / 30
 
   public init() {}
 
   /// Decodes field by field, so settings saved before a field existed keep the rest.
   public init(from decoder: any Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
-    let defaults = ReturnKeySettings()
-    isEnabled = try container.decode(.isEnabled, default: defaults.isEnabled)
+    let defaults = KeySettings()
+    isReturnEnabled = try container.decode(.isReturnEnabled, default: defaults.isReturnEnabled)
+    isDeleteEnabled = try container.decode(.isDeleteEnabled, default: defaults.isDeleteEnabled)
     top = try container.decode(.top, default: defaults.top)
     bottom = try container.decode(.bottom, default: defaults.bottom)
     maxTapDuration = try container.decode(.maxTapDuration, default: defaults.maxTapDuration)
+    repeatDelay = try container.decode(.repeatDelay, default: defaults.repeatDelay)
+    repeatInterval = try container.decode(.repeatInterval, default: defaults.repeatInterval)
   }
 
-  /// Whether the key is on and has some height.
-  var isActive: Bool {
-    isEnabled && bottom > top
+  /// Whether `key` is on and has some height.
+  func isActive(_ key: TouchKey) -> Bool {
+    let isEnabled =
+      switch key {
+      case .returnKey: isReturnEnabled
+      case .deleteKey: isDeleteEnabled
+      }
+    return isEnabled && bottom > top
   }
 }
 
 /// Turns raw touches on the phone's surface into mouse-button events.
 ///
 /// Rules (see `docs/architecture.md`, touch state machine):
-/// - A touch is accepted when it begins in the top `acceptedFraction` of the surface, or on the
-///   Enter key, and outside the side bands. Touches that begin anywhere else are ignored for their
-///   whole life: they emit nothing and never count as a finger.
+/// - A touch is accepted when it begins in the top `acceptedFraction` of the surface, or on a key,
+///   and outside the side bands. Touches that begin anywhere else are ignored for their whole
+///   life: they emit nothing and never count as a finger.
 /// - The accepted area is split down the middle: a touch that begins in the left half is the left
 ///   button, one in the right half the right button. Its `.contact` and press are emitted at once,
-///   at the touch's time. With the Enter key on, the left button ends where the key starts.
+///   at the touch's time. Each button ends where the key below it starts, while that key is on.
 /// - A touch that begins on the scroll wheel (`wheelRect(in:)`, when the wheel is on) is no
 ///   button; the caller rolls the `ScrollWheel` with it, and reports a tap on it with
 ///   `middleClick(at:)`.
-/// - A touch that begins on the Enter key (`returnKeyRect(in:)`) is no button either. It emits
-///   `.contact` when it lands and when it lifts, and `.returnKey` at the lift if it was down no
-///   longer than `ReturnKeySettings.maxTapDuration`. Another touch on the key meanwhile is
-///   ignored.
+/// - A touch that begins on a key (`keyRect(_:in:)`) is no button either. It emits `.contact` when
+///   it lands and when it lifts. Enter emits `.key` at the lift if it was down no longer than
+///   `KeySettings.maxTapDuration`. Delete emits `.key` at the lift if it hasn't repeated yet, and
+///   repeats while held: `repeatDelay` after it landed and every `repeatInterval` after that
+///   (from `advance(to:)`). Another touch on a held key is ignored.
 /// - A touch that begins in a half whose button is already held (or whose release is still
 ///   pending) is an extra: ignored for its whole life. The two buttons are independent, so one
 ///   finger in each half holds both.
@@ -107,10 +121,20 @@ public struct TouchClassifier: Sendable {
     var scheduledRelease: TimeInterval?
   }
 
-  private var presses: [MouseButton: Press] = [:]
+  /// A finger on a key.
+  private struct KeyTouch {
+    var id: Int
+    var landedAt: TimeInterval
 
-  /// The touch on the Enter key and when it landed.
-  private var returnKeyTouch: (id: Int, landedAt: TimeInterval)?
+    /// How many times Delete has repeated during this touch.
+    var repeats = 0
+  }
+
+  /// Delete's repeats are never closer together than this, whatever the settings say.
+  private static let minimumRepeatInterval: TimeInterval = 0.01
+
+  private var presses: [MouseButton: Press] = [:]
+  private var keyTouches: [TouchKey: KeyTouch] = [:]
 
   public init(settings: TouchSettings = TouchSettings()) {
     self.settings = settings
@@ -121,14 +145,14 @@ public struct TouchClassifier: Sendable {
     presses.keys.reduce(into: MouseButtons()) { $0.insert($1.mask) }
   }
 
-  /// Whether a finger is on the Enter key.
-  public var isReturnKeyTouched: Bool {
-    returnKeyTouch != nil
+  /// The keys a finger is on.
+  public var touchedKeys: Set<TouchKey> {
+    Set(keyTouches.keys)
   }
 
   /// The next time `advance(to:)` must be called, or `nil` when nothing is pending.
   public var nextDeadline: TimeInterval? {
-    presses.values.compactMap(\.scheduledRelease).min()
+    (presses.values.compactMap(\.scheduledRelease) + [nextDeleteRepeat].compactMap { $0 }).min()
   }
 
   /// Call from `touchesBegan` for each new touch.
@@ -146,11 +170,11 @@ public struct TouchClassifier: Sendable {
   ) -> [TouchEvent] {
     var events = advance(to: time)
     guard !isOnWheel(location, in: size), !presses.values.contains(where: { $0.owner == id }),
-      returnKeyTouch?.id != id
+      !keyTouches.values.contains(where: { $0.id == id })
     else { return events }
-    if isOnReturnKey(location, in: size) {
-      guard returnKeyTouch == nil else { return events }
-      returnKeyTouch = (id, time)
+    if let key = key(at: location, in: size) {
+      guard keyTouches[key] == nil else { return events }
+      keyTouches[key] = KeyTouch(id: id, landedAt: time)
       events.append(.contact(time: time))
       return events
     }
@@ -169,12 +193,17 @@ public struct TouchClassifier: Sendable {
   /// Call from `touchesEnded` and `touchesCancelled` for each lifted touch.
   public mutating func touchEnded(id: Int, time: TimeInterval) -> [TouchEvent] {
     var events = advance(to: time)
-    if let touch = returnKeyTouch, touch.id == id {
-      returnKeyTouch = nil
+    if let (key, touch) = keyTouches.first(where: { $0.value.id == id }) {
+      keyTouches[key] = nil
       events.append(.contact(time: time))
       let heldFor = time - touch.landedAt
-      if heldFor <= settings.returnKey.maxTapDuration {
-        events.append(.returnKey(heldFor: heldFor, time: time))
+      let isTap =
+        switch key {
+        case .returnKey: heldFor <= settings.keys.maxTapDuration
+        case .deleteKey: touch.repeats == 0
+        }
+      if isTap {
+        events.append(.key(key, heldFor: heldFor, isRepeat: false, time: time))
       }
       return events
     }
@@ -192,14 +221,27 @@ public struct TouchClassifier: Sendable {
     return events
   }
 
-  /// Emits every release that's due at or before `time`, in time order.
+  /// Emits every release and Delete repeat that's due at or before `time`, in time order.
   public mutating func advance(to time: TimeInterval) -> [TouchEvent] {
     let due = presses
       .compactMap { button, press in
         press.scheduledRelease.flatMap { $0 <= time ? (button, $0) : nil }
       }
       .sorted { ($0.1, $0.0.rawValue) < ($1.1, $1.0.rawValue) }
-    return due.map { button, releaseTime in release(button, at: releaseTime) }
+    var events = due.map { button, releaseTime in release(button, at: releaseTime) }
+    if var touch = keyTouches[.deleteKey] {
+      var repeatTime = nextRepeat(of: touch)
+      while repeatTime <= time {
+        touch.repeats += 1
+        events.append(
+          .key(.deleteKey, heldFor: repeatTime - touch.landedAt, isRepeat: true, time: repeatTime))
+        repeatTime = nextRepeat(of: touch)
+      }
+      keyTouches[.deleteKey] = touch
+    }
+    return events.enumerated()
+      .sorted { ($0.element.time, $0.offset) < ($1.element.time, $1.offset) }
+      .map(\.element)
   }
 
   /// A tap on the scroll wheel: a middle click, pressed at `time` and released
@@ -231,23 +273,25 @@ public struct TouchClassifier: Sendable {
     return rect.contains(location)
   }
 
-  /// The Enter key, in the surface's coordinates: the left half between `ReturnKeySettings.top`
-  /// and `bottom`. Nil when it's off.
-  public func returnKeyRect(in size: CGSize) -> CGRect? {
-    let key = settings.returnKey
-    guard key.isActive else { return nil }
-    let top = size.height * CGFloat(key.top)
+  /// A key, in the surface's coordinates: Enter is the left half between `KeySettings.top` and
+  /// `bottom`, Delete the right half. Nil when it's off.
+  public func keyRect(_ key: TouchKey, in size: CGSize) -> CGRect? {
+    let keys = settings.keys
+    guard keys.isActive(key) else { return nil }
+    let half = size.width / 2
+    let top = size.height * CGFloat(keys.top)
     return CGRect(
-      x: 0, y: top, width: size.width / 2, height: size.height * CGFloat(key.bottom) - top)
+      x: key == .returnKey ? 0 : half, y: top, width: half,
+      height: size.height * CGFloat(keys.bottom) - top)
   }
 
-  /// A touch beginning at `location` taps the Enter key rather than pressing a button. The wheel
-  /// comes first where the two meet.
-  public func isOnReturnKey(_ location: CGPoint, in size: CGSize) -> Bool {
-    guard isBetweenSideBands(location, in: size), !isOnWheel(location, in: size),
-      let rect = returnKeyRect(in: size)
-    else { return false }
-    return rect.contains(location)
+  /// The key a touch beginning at `location` presses rather than a button, if any. The wheel comes
+  /// first where they meet.
+  public func key(at location: CGPoint, in size: CGSize) -> TouchKey? {
+    guard isBetweenSideBands(location, in: size), !isOnWheel(location, in: size) else {
+      return nil
+    }
+    return TouchKey.allCases.first { keyRect($0, in: size)?.contains(location) == true }
   }
 
   /// Releases every held button at `time` and forgets every touch, e.g. when the app goes
@@ -257,7 +301,7 @@ public struct TouchClassifier: Sendable {
     for button in MouseButton.allCases where presses[button] != nil {
       events.append(release(button, at: time))
     }
-    returnKeyTouch = nil
+    keyTouches.removeAll()
     return events
   }
 
@@ -269,14 +313,27 @@ public struct TouchClassifier: Sendable {
       && isBetweenSideBands(location, in: size)
   }
 
-  /// Whether a touch at `location` may press `button`: the left button ends where the Enter key
+  /// Whether a touch at `location` may press `button`: each button ends where the key below it
   /// starts.
   private func isAccepted(_ location: CGPoint, for button: MouseButton, in size: CGSize) -> Bool {
-    guard button == .left, settings.returnKey.isActive else {
+    let keyBelow: TouchKey = button == .left ? .returnKey : .deleteKey
+    guard settings.keys.isActive(keyBelow) else {
       return isAccepted(location, in: size)
     }
-    return location.y < size.height * CGFloat(settings.returnKey.top)
+    return location.y < size.height * CGFloat(settings.keys.top)
       && isBetweenSideBands(location, in: size)
+  }
+
+  /// When Delete presses next while `touch` holds it.
+  private func nextRepeat(of touch: KeyTouch) -> TimeInterval {
+    let keys = settings.keys
+    return touch.landedAt + keys.repeatDelay
+      + Double(touch.repeats) * max(Self.minimumRepeatInterval, keys.repeatInterval)
+  }
+
+  /// When the held Delete key presses next, or nil when no finger is on it.
+  private var nextDeleteRepeat: TimeInterval? {
+    keyTouches[.deleteKey].map(nextRepeat(of:))
   }
 
   private func isBetweenSideBands(_ location: CGPoint, in size: CGSize) -> Bool {

@@ -149,9 +149,12 @@ final class MouseEngine: @unchecked Sendable {
           logNow(
             .debug, "touch", isDown ? "down" : "up",
             fields: ["button": .string(String(describing: button))])
-        case .returnKey(let heldFor, _):
+        case .key(let key, let heldFor, let isRepeat, _):
           logNow(
-            .debug, "touch", "returnKey", fields: ["heldMs": .double((heldFor * 1000).rounded())])
+            .debug, "touch", key.shortcut.logName,
+            fields: [
+              "heldMs": .double((heldFor * 1000).rounded()), "repeat": .bool(isRepeat),
+            ])
         case .contact:
           break
         }

@@ -3,9 +3,9 @@ import SwiftUI
 import SourisCore
 
 /// Marks the touch area: hairlines at its lower edges and down the middle between the left and
-/// right buttons, and one between the left button and the Enter key below it; a faint lightening
-/// over each button while it is held and over the Enter key while touched; a faint return arrow
-/// on the Enter key; and the scroll wheel on the middle line.
+/// right buttons, and one between each button and the key below it; a faint lightening over each
+/// button while it is held and over each key while touched; a faint return arrow on the Enter key
+/// and a delete symbol on the Delete key; and the scroll wheel on the middle line.
 struct TouchAreaGuide: View {
   let touch: TouchSettings
   let controller: TouchController
@@ -18,33 +18,27 @@ struct TouchAreaGuide: View {
       let half = size.width / 2
       let areaBottom = size.height * CGFloat(touch.acceptedFraction)
       let classifier = TouchClassifier(settings: touch)
-      let enterKey = classifier.returnKeyRect(in: size)
+      let enterKey = classifier.keyRect(.returnKey, in: size)
+      let deleteKey = classifier.keyRect(.deleteKey, in: size)
       let hairline = 1 / displayScale
       ZStack(alignment: .topLeading) {
         pressShade(isLit: controller.heldButtons.contains(.left))
           .frame(width: half, height: enterKey?.minY ?? areaBottom)
         pressShade(isLit: controller.heldButtons.contains(.right))
-          .frame(width: half, height: areaBottom)
+          .frame(width: half, height: deleteKey?.minY ?? areaBottom)
           .offset(x: half)
         if let enterKey {
-          pressShade(isLit: controller.isReturnKeyTouched)
-            .frame(width: enterKey.width, height: enterKey.height)
-            .offset(x: enterKey.minX, y: enterKey.minY)
-          Image(systemName: "return")
-            .font(.system(size: 20, weight: .regular))
-            .foregroundStyle(.white.opacity(controller.isReturnKeyTouched ? 0.4 : 0.16))
-            .animation(.easeOut(duration: 0.08), value: controller.isReturnKeyTouched)
-            .frame(width: enterKey.width, height: enterKey.height)
-            .offset(x: enterKey.minX, y: enterKey.minY)
-          line(width: half, height: hairline)
-            .offset(y: enterKey.minY)
+          key(.returnKey, symbol: "return", in: enterKey, hairline: hairline)
         }
-        line(width: hairline, height: max(areaBottom, enterKey?.maxY ?? 0))
+        if let deleteKey {
+          key(.deleteKey, symbol: "delete.left", in: deleteKey, hairline: hairline)
+        }
+        line(width: hairline, height: max(areaBottom, enterKey?.maxY ?? 0, deleteKey?.maxY ?? 0))
           .offset(x: half - hairline / 2)
         line(width: half, height: hairline)
           .offset(y: enterKey?.maxY ?? areaBottom)
         line(width: half, height: hairline)
-          .offset(x: half, y: areaBottom)
+          .offset(x: half, y: deleteKey?.maxY ?? areaBottom)
         if let wheel = classifier.wheelRect(in: size) {
           WheelStrip(
             controller: controller, notchSpacing: touch.wheel.notchSpacing, hairline: hairline)
@@ -55,6 +49,25 @@ struct TouchAreaGuide: View {
       .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     .allowsHitTesting(false)
+  }
+
+  /// A key's lightening and symbol, and the hairline between it and the button above.
+  @ViewBuilder
+  private func key(
+    _ key: TouchKey, symbol: String, in rect: CGRect, hairline: CGFloat
+  ) -> some View {
+    let isTouched = controller.touchedKeys.contains(key)
+    pressShade(isLit: isTouched)
+      .frame(width: rect.width, height: rect.height)
+      .offset(x: rect.minX, y: rect.minY)
+    Image(systemName: symbol)
+      .font(.system(size: 20, weight: .regular))
+      .foregroundStyle(.white.opacity(isTouched ? 0.4 : 0.16))
+      .animation(.easeOut(duration: 0.08), value: isTouched)
+      .frame(width: rect.width, height: rect.height)
+      .offset(x: rect.minX, y: rect.minY)
+    line(width: rect.width, height: hairline)
+      .offset(x: rect.minX, y: rect.minY)
   }
 
   private func pressShade(isLit: Bool) -> some View {
