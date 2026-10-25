@@ -25,7 +25,7 @@ import simd
 
   @Test func gatesFollowThePrecedenceOrder() {
     // paused > waitingForTracking > notEngaged > lifted > trackingLost > tiltScrolling
-    // > clickFreeze > open
+    // > wheelHeld > clickFreeze > open
     let order: [(CursorGate.Conditions, CursorGate)] = [
       (.paused, .paused),
       (.waitingForTracking, .waitingForTracking),
@@ -33,10 +33,11 @@ import simd
       (.lifted, .lifted),
       (.trackingLost, .trackingLost),
       (.tiltScrolling, .tiltScrolling),
+      (.wheelHeld, .wheelHeld),
       (.clickFreeze, .clickFreeze),
     ]
     #expect(CursorGate(highestOf: []) == .open)
-    // Every combination of the seven conditions resolves to the first one present.
+    // Every combination of the eight conditions resolves to the first one present.
     for bits in 0..<(1 << order.count) {
       let conditions = CursorGate.Conditions(rawValue: bits)
       let expected = order.first { conditions.contains($0.0) }?.1 ?? .open
@@ -48,7 +49,7 @@ import simd
     // The raw values reach logs and replay CSVs.
     #expect(CursorGate.allCases.map(\.rawValue) == [
       "open", "paused", "waitingForTracking", "notEngaged", "lifted", "trackingLost",
-      "tiltScrolling", "clickFreeze",
+      "tiltScrolling", "wheelHeld", "clickFreeze",
     ])
   }
 
@@ -61,7 +62,7 @@ import simd
     for (index, gate) in CursorGate.allCases.enumerated() {
       #expect(seconds[gate] == Double(index + 1))
     }
-    #expect(seconds.total == 36)
+    #expect(seconds.total == 45)
     seconds[.lifted] = 0.5
     #expect(seconds[.lifted] == 0.5)
     #expect(seconds[.trackingLost] == 6)

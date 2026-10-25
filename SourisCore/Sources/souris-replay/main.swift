@@ -208,7 +208,7 @@ func run(_ options: Options) throws {
       }
     case .imu(let sample):
       imuTimes.append(sample.timestamp)
-    case .settings, .touch, .scrollPress, .paused, .recenter:
+    case .settings, .touch, .scrollPress, .wheel, .paused, .recenter:
       break
     }
   }

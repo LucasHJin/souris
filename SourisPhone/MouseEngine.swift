@@ -146,6 +146,22 @@ final class MouseEngine: @unchecked Sendable {
     }
   }
 
+  /// Forwards a batch from the scroll wheel, in order.
+  func handle(wheelEvents: [ScrollWheelEvent]) {
+    queue.async { [self] in
+      watchdog?.note("wheel")
+      for event in wheelEvents {
+        recorder?.record(.wheel(event))
+        pipeline.handle(event)
+        if case .touch(let isDown, _) = event {
+          logNow(.debug, "wheel", isDown ? "down" : "up")
+        }
+      }
+      drainPipelineEvents()
+      sendIfChanged()
+    }
+  }
+
   /// Forwards one volume-button press.
   func handle(scrollPress press: ScrollButtonPress) {
     queue.async { [self] in

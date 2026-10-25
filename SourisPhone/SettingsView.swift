@@ -14,6 +14,7 @@ struct SettingsView: View {
       Form {
         pointerSection
         scrollSection
+        wheelSection
         clicksSection
         liftSection
         connectionSection
@@ -143,6 +144,72 @@ struct SettingsView: View {
     }
   }
 
+  // MARK: - Scroll wheel
+
+  private var wheelSection: some View {
+    Section {
+      Toggle("Scroll wheel", isOn: $model.settings.touch.wheel.isEnabled)
+      Group {
+        SliderRow(
+          title: "Step",
+          value: $model.settings.touch.wheel.pixelsPerNotch,
+          range: 10...150,
+          step: 5,
+          fractionDigits: 0,
+          unit: " px")
+        SliderRow(
+          title: "Notch spacing",
+          value: $model.settings.touch.wheel.notchSpacing,
+          range: 6...30,
+          step: 1,
+          fractionDigits: 0,
+          unit: " pt")
+        SliderRow(
+          title: "Acceleration",
+          value: $model.settings.touch.wheel.maxAcceleration,
+          range: 1...8,
+          step: 0.5,
+          fractionDigits: 1,
+          unit: "×")
+        Toggle("Momentum", isOn: $model.settings.touch.wheel.hasMomentum)
+        SliderRow(
+          title: "Spin time",
+          value: $model.settings.touch.wheel.momentumTime,
+          range: 0.1...1,
+          step: 0.05,
+          displayFactor: 1000,
+          fractionDigits: 0,
+          unit: " ms")
+          .disabled(!model.settings.touch.wheel.hasMomentum)
+        SliderRow(
+          title: "Tick strength",
+          value: $model.settings.touch.wheel.tickIntensity,
+          range: 0...1,
+          step: 0.05,
+          fractionDigits: 2)
+        Toggle("Tick while spinning", isOn: $model.settings.touch.wheel.ticksWhileSpinning)
+        Toggle("Tap for middle click", isOn: $model.settings.touch.wheel.tapClicksMiddle)
+        Toggle("Reverse direction", isOn: $model.settings.touch.wheel.isReversed)
+        SliderRow(
+          title: "Width",
+          value: $model.settings.touch.wheel.width,
+          range: 28...90,
+          step: 2,
+          fractionDigits: 0,
+          unit: " pt")
+      }
+      .disabled(!model.settings.touch.wheel.isEnabled)
+    } header: {
+      Text("Scroll wheel")
+    } footer: {
+      Text(
+        "Roll a fingertip along the strip between the buttons like a mouse wheel: each notch "
+          + "ticks and scrolls one step, more when you roll fast. Flick it to let it spin on; "
+          + "touch it to stop. The pointer holds still while your finger is on it. Ticks need "
+          + "Haptics on. If ticks while spinning make the pointer shake, turn them off.")
+    }
+  }
+
   // MARK: - Clicks
 
   private var clicksSection: some View {
@@ -161,7 +228,8 @@ struct SettingsView: View {
     } footer: {
       Text(
         "Tap the left half of the top area to left-click and the right half to right-click. Two "
-          + "quick taps on the left half double-click.")
+          + "quick taps on the left half double-click. A tap on the scroll wheel between them "
+          + "middle-clicks.")
     }
   }
 

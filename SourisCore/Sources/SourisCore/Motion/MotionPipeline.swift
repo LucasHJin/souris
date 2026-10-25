@@ -204,6 +204,12 @@ public struct MotionPipeline: Sendable {
   /// Signed distance the current tilt scroll has covered, px.
   private var tiltScrolled: Double = 0
 
+  /// A finger is on the scroll wheel, and the wheel is scrolling, with what it has scrolled
+  /// since it started, px.
+  private var isWheelHeld = false
+  private var isWheelTurning = false
+  private var wheelScrolled: Double = 0
+
   // Events and gate accounting.
   private var events = RingBuffer<PipelineEvent>(capacity: MotionPipeline.eventCapacity)
 
@@ -338,7 +344,7 @@ public struct MotionPipeline: Sendable {
       sample.timestamp < $0 + settings.tiltScroll.touchSuppression
     } ?? false
     let isScrollAllowed = settings.tiltScroll.isEnabled && !isPaused && isEngaged
-      && !liftClutch.isLifted && state.buttons.isEmpty && !isSuppressed
+      && !liftClutch.isLifted && state.buttons.isEmpty && !isWheelHeld && !isSuppressed
     let wasTiltActive = scrollTilt.isActive
     let tiltDistance = scrollTilt.update(
       pitch: pitch,
@@ -402,6 +408,35 @@ public struct MotionPipeline: Sendable {
     finishInput()
   }
 
+  /// Feeds one event from the scroll wheel. A finger on the wheel holds the cursor still, as
+  /// rolling it pushes the phone; landing and lifting each start a click freeze too. Turns add to
+  /// the scroll and keep `scrollActive` set until the wheel stops. Ignored while paused.
+  public mutating func handle(_ event: ScrollWheelEvent) {
+    inputTime = event.time
+    guard !isPaused else { return }
+    switch event {
+    case .touch(let isDown, let time):
+      isWheelHeld = isDown
+      clickFreeze.trigger(at: time, duration: settings.click.freezeDuration)
+      lastTouchTime = max(lastTouchTime ?? time, time)
+      if isDown {
+        endTiltScroll()
+      }
+    case .turn(let pixels, _):
+      if !isWheelTurning {
+        isWheelTurning = true
+        wheelScrolled = 0
+        emit(.scrollStarted(source: .wheel))
+      }
+      state.scroll.y += pixels
+      wheelScrolled += pixels
+    case .stop:
+      endWheelScroll()
+    }
+    refreshGate(at: inputTime)
+    finishInput()
+  }
+
   /// Pausing releases every button, ends any scroll and stops output until unpaused. Unpausing
   /// re-engages like setting the phone down: it re-captures the heading, level angle and desk
   /// height from the next samples.
@@ -410,6 +445,8 @@ public struct MotionPipeline: Sendable {
       state.buttons = []
       endTiltScroll()
       endButtonScroll()
+      endWheelScroll()
+      isWheelHeld = false
       clickFreeze.cancel()
     } else if self.isPaused {
       needsEngage = true
@@ -761,6 +798,7 @@ public struct MotionPipeline: Sendable {
     if liftClutch.isLifted { conditions.insert(.lifted) }
     if isTrackingBad { conditions.insert(.trackingLost) }
     if scrollTilt.isActive { conditions.insert(.tiltScrolling) }
+    if isWheelHeld { conditions.insert(.wheelHeld) }
     if clickFreeze.isActive { conditions.insert(.clickFreeze) }
     let gate = CursorGate(highestOf: conditions)
 
@@ -787,6 +825,12 @@ public struct MotionPipeline: Sendable {
     guard scrollTilt.isActive else { return }
     scrollTilt.end()
     emit(.scrollEnded(source: .tilt, pixels: tiltScrolled))
+  }
+
+  private mutating func endWheelScroll() {
+    guard isWheelTurning else { return }
+    isWheelTurning = false
+    emit(.scrollEnded(source: .wheel, pixels: wheelScrolled))
   }
 
   private mutating func endButtonScroll() {
@@ -826,7 +870,7 @@ public struct MotionPipeline: Sendable {
     if isTrackingLimited {
       flags.insert(.trackingLimited)
     }
-    if scrollTilt.isActive || buttonScroll.isActive {
+    if scrollTilt.isActive || buttonScroll.isActive || isWheelTurning {
       flags.insert(.scrollActive)
     }
     if isPaused {

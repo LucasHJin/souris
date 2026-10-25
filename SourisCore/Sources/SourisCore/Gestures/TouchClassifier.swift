@@ -14,7 +14,22 @@ public struct TouchSettings: Codable, Equatable, Sendable {
   /// reaches the Mac as a press and a release in separate packets.
   public var minimumPressDuration: TimeInterval = 0.03
 
+  /// The scroll wheel between the two buttons.
+  public var wheel = ScrollWheelSettings()
+
   public init() {}
+
+  /// Decodes field by field, so settings saved before a field existed keep the rest.
+  public init(from decoder: any Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let defaults = TouchSettings()
+    acceptedFraction = try container.decode(.acceptedFraction, default: defaults.acceptedFraction)
+    sideRejectBand = try container.decode(.sideRejectBand, default: defaults.sideRejectBand)
+    minimumPressDuration = try container.decode(
+      .minimumPressDuration, default: defaults.minimumPressDuration)
+    wheel = (try? container.decodeIfPresent(ScrollWheelSettings.self, forKey: .wheel))
+      ?? defaults.wheel
+  }
 }
 
 /// Turns raw touches on the phone's surface into mouse-button events.
@@ -26,6 +41,9 @@ public struct TouchSettings: Codable, Equatable, Sendable {
 /// - The accepted area is split down the middle: a touch that begins in the left half is the left
 ///   button, one in the right half the right button. Its `.contact` and press are emitted at once,
 ///   at the touch's time.
+/// - A touch that begins on the scroll wheel (`wheelRect(in:)`, when the wheel is on) is no
+///   button; the caller rolls the `ScrollWheel` with it, and reports a tap on it with
+///   `middleClick(at:)`.
 /// - A touch that begins in a half whose button is already held (or whose release is still
 ///   pending) is an extra: ignored for its whole life. The two buttons are independent, so one
 ///   finger in each half holds both.
@@ -77,7 +95,8 @@ public struct TouchClassifier: Sendable {
     time: TimeInterval
   ) -> [TouchEvent] {
     var events = advance(to: time)
-    guard isAccepted(location, in: size), !presses.values.contains(where: { $0.owner == id })
+    guard isAccepted(location, in: size), !isOnWheel(location, in: size),
+      !presses.values.contains(where: { $0.owner == id })
     else { return events }
     let button = Self.button(at: location, in: size)
     guard presses[button] == nil else {
@@ -117,6 +136,35 @@ public struct TouchClassifier: Sendable {
     return due.map { button, releaseTime in release(button, at: releaseTime) }
   }
 
+  /// A tap on the scroll wheel: a middle click, pressed at `time` and released
+  /// `minimumPressDuration` later (from `advance(to:)`). Ignored while the middle button is held.
+  public mutating func middleClick(at time: TimeInterval) -> [TouchEvent] {
+    var events = advance(to: time)
+    guard presses[.middle] == nil else { return events }
+    presses[.middle] = Press(
+      owner: nil, pressedAt: time, scheduledRelease: time + settings.minimumPressDuration)
+    events.append(.contact(time: time))
+    events.append(.button(.middle, isDown: true, time: time))
+    return events
+  }
+
+  /// The scroll wheel's strip, in the surface's coordinates, or nil with the wheel off.
+  public func wheelRect(in size: CGSize) -> CGRect? {
+    let wheel = settings.wheel
+    guard wheel.isEnabled else { return nil }
+    let areaHeight = size.height * CGFloat(settings.acceptedFraction)
+    let height = areaHeight * CGFloat(min(1, max(0.1, wheel.heightFraction)))
+    let width = CGFloat(wheel.width)
+    return CGRect(
+      x: (size.width - width) / 2, y: (areaHeight - height) / 2, width: width, height: height)
+  }
+
+  /// A touch beginning at `location` rolls the scroll wheel rather than pressing a button.
+  public func isOnWheel(_ location: CGPoint, in size: CGSize) -> Bool {
+    guard isAccepted(location, in: size), let rect = wheelRect(in: size) else { return false }
+    return rect.contains(location)
+  }
+
   /// Releases every held button at `time` and forgets every touch, e.g. when the app goes
   /// inactive. Touches still on the screen stay ignored until they lift.
   public mutating func cancelAll(time: TimeInterval) -> [TouchEvent] {
@@ -145,5 +193,12 @@ public struct TouchClassifier: Sendable {
   private mutating func release(_ button: MouseButton, at time: TimeInterval) -> TouchEvent {
     presses[button] = nil
     return .button(button, isDown: false, time: time)
+  }
+}
+
+extension KeyedDecodingContainer {
+  /// The value stored under `key`, or `fallback` if the key is absent.
+  fileprivate func decode<Value: Decodable>(_ key: Key, default fallback: Value) throws -> Value {
+    try decodeIfPresent(Value.self, forKey: key) ?? fallback
   }
 }

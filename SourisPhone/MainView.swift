@@ -14,9 +14,7 @@ struct MainView: View {
         .allowsHitTesting(false)
         .accessibilityHidden(true)
       TouchSurface(controller: model.touchController)
-      TouchAreaGuide(
-        fraction: model.settings.touch.acceptedFraction,
-        heldButtons: model.touchController.heldButtons)
+      TouchAreaGuide(touch: model.settings.touch, controller: model.touchController)
       StatusColumn(model: model)
       settingsButton
     }

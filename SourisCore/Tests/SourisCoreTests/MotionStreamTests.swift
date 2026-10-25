@@ -259,6 +259,7 @@ extension MotionPipeline {
     case .imu(let sample): process(sample)
     case .touch(let touch): handle(touch)
     case .scrollPress(let press): handle(press)
+    case .wheel(let wheel): handle(wheel)
     case .paused(let isPaused): setPaused(isPaused)
     case .recenter: recenter()
     }

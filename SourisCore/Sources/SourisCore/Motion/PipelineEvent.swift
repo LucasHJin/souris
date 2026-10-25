@@ -7,6 +7,7 @@ public struct PipelineEvent: Equatable, Codable, Sendable {
   public enum ScrollSource: String, Codable, Sendable {
     case tilt
     case buttons
+    case wheel
   }
 
   /// Why the heading and desk height were re-taken without a full engage.

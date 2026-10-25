@@ -32,6 +32,10 @@ final class TouchView: UIView {
     controller.touchesBegan(touches, in: self)
   }
 
+  override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+    controller.touchesMoved(touches, in: self)
+  }
+
   override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
     controller.touchesEnded(touches)
   }

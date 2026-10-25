@@ -2,7 +2,7 @@ import Foundation
 
 /// Why the cursor is or isn't following the sensor point right now. When several reasons apply,
 /// the first in this declaration order after `open` wins: paused, waitingForTracking, notEngaged,
-/// lifted, trackingLost, tiltScrolling, clickFreeze.
+/// lifted, trackingLost, tiltScrolling, wheelHeld, clickFreeze.
 public enum CursorGate: String, Codable, Sendable, CaseIterable {
   /// Nothing holds the cursor back.
   case open
@@ -26,6 +26,9 @@ public enum CursorGate: String, Codable, Sendable, CaseIterable {
   /// A tilt scroll is in progress.
   case tiltScrolling
 
+  /// A finger is on the scroll wheel.
+  case wheelHeld
+
   /// A click freeze is holding the cursor.
   case clickFreeze
 }
@@ -40,6 +43,7 @@ extension CursorGate {
     static let trackingLost = Conditions(rawValue: 1 << 4)
     static let tiltScrolling = Conditions(rawValue: 1 << 5)
     static let clickFreeze = Conditions(rawValue: 1 << 6)
+    static let wheelHeld = Conditions(rawValue: 1 << 7)
 
     let rawValue: Int
   }
@@ -51,6 +55,7 @@ extension CursorGate {
     (.lifted, .lifted),
     (.trackingLost, .trackingLost),
     (.tiltScrolling, .tiltScrolling),
+    (.wheelHeld, .wheelHeld),
     (.clickFreeze, .clickFreeze),
   ]
 
@@ -70,6 +75,7 @@ public struct GateSeconds: Equatable, Sendable {
   private var lifted: Double = 0
   private var trackingLost: Double = 0
   private var tiltScrolling: Double = 0
+  private var wheelHeld: Double = 0
   private var clickFreeze: Double = 0
 
   public init() {}
@@ -94,6 +100,7 @@ public struct GateSeconds: Equatable, Sendable {
     case .lifted: \.lifted
     case .trackingLost: \.trackingLost
     case .tiltScrolling: \.tiltScrolling
+    case .wheelHeld: \.wheelHeld
     case .clickFreeze: \.clickFreeze
     }
   }

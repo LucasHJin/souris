@@ -11,6 +11,9 @@ public enum RecordedEvent: Equatable, Codable, Sendable {
   /// A volume-button press (`MotionPipeline.handle(_:)` with a `ScrollButtonPress`).
   case scrollPress(ScrollButtonPress)
 
+  /// A scroll wheel event (`MotionPipeline.handle(_:)` with a `ScrollWheelEvent`).
+  case wheel(ScrollWheelEvent)
+
   case paused(Bool)
 
   /// `MotionPipeline.recenter()` was called (the Recenter button, or after an ARKit
@@ -121,9 +124,9 @@ public enum RecordingReplay {
 
   /// Replays `events`. If `settings` is given it overrides every recorded settings line.
   ///
-  /// Each input yields one step. Samples are stamped with their arrival time, touches and
-  /// scroll-button presses with their own time, and settings, pause and recenter lines with the
-  /// previous step's time.
+  /// Each input yields one step. Samples are stamped with their arrival time, touches,
+  /// scroll-button presses and wheel events with their own time, and settings, pause and recenter
+  /// lines with the previous step's time.
   public static func run(
     _ events: [RecordedEvent],
     settings: PipelineSettings? = nil
@@ -150,6 +153,9 @@ public enum RecordingReplay {
       case .scrollPress(let press):
         pipeline.handle(press)
         time = press.time
+      case .wheel(let wheel):
+        pipeline.handle(wheel)
+        time = wheel.time
       case .paused(let isPaused):
         pipeline.setPaused(isPaused)
       case .recenter:
