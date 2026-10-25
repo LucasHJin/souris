@@ -36,6 +36,10 @@ final class InputController: @unchecked Sendable {
   /// Packets closer together than this count as one burst, as when Wi-Fi delivers a backlog.
   private static let burstGap: TimeInterval = 0.002
 
+  /// How long after pressing a shortcut its modifiers are checked, giving macOS time to process
+  /// the release.
+  private static let modifierCheckDelay: TimeInterval = 0.1
+
   /// One second of arrivals, summarized in the `input` log entry.
   private struct ReceiveWindow {
     var packets = 0
@@ -256,6 +260,7 @@ final class InputController: @unchecked Sendable {
       case .pressed(let combo):
         fields["keyCode"] = .int(Int(combo.keyCode))
         fields["flags"] = .string(String(combo.flags.rawValue, radix: 16))
+        checkModifiersReleased(after: shortcut.logName)
       case .openedMissionControl:
         fields["opened"] = .string("Mission Control")
       case .disabled:
@@ -271,6 +276,7 @@ final class InputController: @unchecked Sendable {
   private func toggleDictation(_ isOn: Bool) {
     shortcutPoster.post(ShortcutPoster.dictation)
     log.log(.info, "input", "dictation", isOn ? "Started dictation" : "Stopped dictation", [:])
+    checkModifiersReleased(after: "dictation")
   }
 
   /// Posts the motion and scrolling from what has been posted so far to `frame`.
@@ -322,11 +328,25 @@ final class InputController: @unchecked Sendable {
     receive.delays.append((delay - fastest) * 1000)
   }
 
+  /// Logs each press and release, with any modifier keys a press carries.
   private func logButtons(_ changes: [ButtonChange]) {
     for change in changes {
+      var fields: [String: LogValue] = ["button": .string(String(describing: change.button))]
+      if change.isDown, let modifiers = poster.clickModifiers().modifierNames {
+        fields["modifiers"] = .string(modifiers)
+      }
+      log.log(.debug, "input", change.isDown ? "buttonDown" : "buttonUp", nil, fields)
+    }
+  }
+
+  /// Warns if modifier keys are still held a moment after Souris pressed a shortcut, which would
+  /// turn the next clicks into modifier-clicks. A key held on the keyboard shows up here too.
+  private func checkModifiersReleased(after shortcut: String) {
+    queue.asyncAfter(deadline: .now() + Self.modifierCheckDelay) { [self] in
+      guard let modifiers = poster.clickModifiers().modifierNames else { return }
       log.log(
-        .debug, "input", change.isDown ? "buttonDown" : "buttonUp", nil,
-        ["button": .string(String(describing: change.button))])
+        .warning, "input", "modifiersHeld", "Modifier keys are held after a shortcut",
+        ["modifiers": .string(modifiers), "after": .string(shortcut)])
     }
   }
 

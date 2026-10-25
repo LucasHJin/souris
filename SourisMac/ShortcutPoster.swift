@@ -33,6 +33,16 @@ final class ShortcutPoster {
   private static let missionControlApp = URL(
     fileURLWithPath: "/System/Applications/Mission Control.app")
 
+  /// The modifier keys, in the order they go down, with their key codes. Fn isn't one: it rides
+  /// on the arrow and function keys as a flag, and pressing it alone can open the emoji picker
+  /// or start dictation.
+  private static let modifierKeys: [(flag: CGEventFlags, keyCode: CGKeyCode)] = [
+    (.maskControl, 0x3B),
+    (.maskAlternate, 0x3A),
+    (.maskShift, 0x38),
+    (.maskCommand, 0x37),
+  ]
+
   private let source = CGEventSource(stateID: .hidSystemState)
 
   func press(_ shortcut: MacShortcut) -> Outcome {
@@ -60,16 +70,33 @@ final class ShortcutPoster {
     }
   }
 
-  /// Presses `combo` once: key down, then key up, with its modifiers on both.
+  /// Presses `combo` the way a keyboard does: its modifiers down, the key down and up, then the
+  /// modifiers up, so none is left held.
+  ///
+  /// macOS takes the modifiers of the last posted event as held, and the mouse events posted
+  /// after it carry them. Posting only the key, with its modifiers as flags, left Control held
+  /// after ⌃↑ and ⌃⌥D, so every later left click was a Control-click and opened a context menu.
   func post(_ combo: KeyCombo) {
-    for isDown in [true, false] {
-      guard
-        let event = CGEvent(
-          keyboardEventSource: source, virtualKey: combo.keyCode, keyDown: isDown)
-      else { return }
-      event.flags = combo.flags
-      event.post(tap: .cghidEventTap)
+    let modifiers = Self.modifierKeys.filter { combo.flags.contains($0.flag) }
+    var held: CGEventFlags = []
+    for modifier in modifiers {
+      held.insert(modifier.flag)
+      post(key: modifier.keyCode, isDown: true, flags: held)
     }
+    post(key: combo.keyCode, isDown: true, flags: combo.flags)
+    // Fn belongs to the key itself, so it lifts with it.
+    post(key: combo.keyCode, isDown: false, flags: held)
+    for modifier in modifiers.reversed() {
+      held.remove(modifier.flag)
+      post(key: modifier.keyCode, isDown: false, flags: held)
+    }
+  }
+
+  private func post(key: CGKeyCode, isDown: Bool, flags: CGEventFlags) {
+    guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: isDown)
+    else { return }
+    event.flags = flags
+    event.post(tap: .cghidEventTap)
   }
 
   // MARK: - System shortcuts
@@ -110,5 +137,25 @@ final class ShortcutPoster {
     guard parameters[1] != 0xFFFF else { return nil }
     return KeyCombo(
       keyCode: CGKeyCode(parameters[1]), flags: CGEventFlags(rawValue: UInt64(parameters[2])))
+  }
+}
+
+extension CGEventFlags {
+  /// Control, Option, Shift, Command and Fn: the flags a held key sets.
+  static let modifierKeys: CGEventFlags = [
+    .maskControl, .maskAlternate, .maskShift, .maskCommand, .maskSecondaryFn,
+  ]
+
+  /// The held modifier keys, for the log, such as "control+option"; nil when none is held.
+  var modifierNames: String? {
+    let names: [(CGEventFlags, String)] = [
+      (.maskControl, "control"),
+      (.maskAlternate, "option"),
+      (.maskShift, "shift"),
+      (.maskCommand, "command"),
+      (.maskSecondaryFn, "fn"),
+    ]
+    let held = names.filter { contains($0.0) }.map(\.1)
+    return held.isEmpty ? nil : held.joined(separator: "+")
   }
 }

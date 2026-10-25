@@ -159,6 +159,17 @@ final class EventPoster {
     counters.buttonEvents += 1
   }
 
+  /// The modifier keys a click posted now would carry: those held on a keyboard, and any a posted
+  /// key event left held. A held Control turns a left click into a context-menu click.
+  func clickModifiers() -> CGEventFlags {
+    guard
+      let event = CGEvent(
+        mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: .zero,
+        mouseButton: .left)
+    else { return [] }
+    return event.flags.intersection(.modifierKeys)
+  }
+
   /// Where to press or release: the tracked fractional position, unless something else (the
   /// trackpad) has moved the cursor since our last move. A button event at a stale position would
   /// jump the cursor back there.
