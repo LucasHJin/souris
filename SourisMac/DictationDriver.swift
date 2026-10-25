@@ -21,7 +21,8 @@ final class DictationDriver {
   private let log: MacLog
   private let shortcutPoster: ShortcutPoster
   private let probe = DictationRecordingProbe()
-  private var follower = DictationFollower(keys: [.shortcut])
+  /// The 🎤 key first, since it works in Spotlight too; ⌃⌥D if it starts nothing.
+  private var follower = DictationFollower(keys: [.microphone, .shortcut])
   private var timer: (any DispatchSourceTimer)?
 
   init(queue: DispatchQueue, log: MacLog, shortcutPoster: ShortcutPoster) {
@@ -84,7 +85,10 @@ final class DictationDriver {
     for action in actions {
       switch action {
       case .press(let key, let purpose):
-        shortcutPoster.post(Self.combo(for: key))
+        switch key {
+        case .microphone: shortcutPoster.pressMicrophoneKey()
+        case .shortcut: shortcutPoster.post(ShortcutPoster.dictation)
+        }
         log.log(
           .info, "input", "dictationKey", nil,
           ["key": .string(key.rawValue), "purpose": .string(purpose.rawValue)])
@@ -105,14 +109,6 @@ final class DictationDriver {
             ? "Dictation kept recording after every stop press"
             : "No key started Dictation", ["purpose": .string(purpose.rawValue)])
       }
-    }
-  }
-
-  private static func combo(for key: DictationFollower.Key) -> ShortcutPoster.KeyCombo {
-    switch key {
-    case .shortcut: ShortcutPoster.dictation
-    // Not in `follower.keys` yet.
-    case .microphone: ShortcutPoster.dictation
     }
   }
 }

@@ -25,10 +25,15 @@ final class ShortcutPoster {
     case disabled
   }
 
-  /// What Souris presses to start and to stop dictation: ⌃⌥D. Set the same shortcut in System
-  /// Settings → Keyboard → Dictation → Shortcut → Customize. The keyboard's 🎤 key sends a
-  /// hardware code an app can't make, and ⌃⌥Space switches input sources.
+  /// Dictation's custom shortcut, ⌃⌥D, which Souris presses when the 🎤 key starts nothing. Set
+  /// the same shortcut in System Settings → Keyboard → Dictation → Shortcut → Customize; ⌃⌥Space
+  /// switches input sources. Spotlight never passes it to Dictation.
   static let dictation = KeyCombo(keyCode: 0x02, flags: [.maskControl, .maskAlternate])
+
+  /// The keyboard's 🎤 key (F5 on the M1 Pro) as macOS sees it. Unlike ⌃⌥D it reaches Dictation
+  /// in Spotlight too: the Siri process takes it and, for a press shorter than its 0.42 s hold
+  /// threshold (holding asks Siri), passes it on to Dictation.
+  private static let microphoneKeyCode: CGKeyCode = 0xB0
 
   private static let missionControlApp = URL(
     fileURLWithPath: "/System/Applications/Mission Control.app")
@@ -90,6 +95,14 @@ final class ShortcutPoster {
       held.remove(modifier.flag)
       post(key: modifier.keyCode, isDown: false, flags: held)
     }
+  }
+
+  /// Presses the 🎤 key, down and up back to back so it never reads as held. Both carry the Fn
+  /// flag, as a real press's do: without it the release might not count as the key's, and the
+  /// press would then turn into a hold.
+  func pressMicrophoneKey() {
+    post(key: Self.microphoneKeyCode, isDown: true, flags: .maskSecondaryFn)
+    post(key: Self.microphoneKeyCode, isDown: false, flags: .maskSecondaryFn)
   }
 
   private func post(key: CGKeyCode, isDown: Bool, flags: CGEventFlags) {
