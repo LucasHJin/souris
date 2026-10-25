@@ -67,6 +67,17 @@ public struct PipelineDiagnostics: Equatable, Sendable {
   /// Events discarded because the buffer held 512 undrained ones.
   public var droppedEvents = 0
 
+  /// Whether motion prediction is moving the cursor.
+  public var prediction = PredictionStatus.off
+
+  /// How far ahead of ARKit's latest position the prediction puts the camera, horizontally, in
+  /// millimetres. About speed × ARKit's delay while moving, near 0 at rest.
+  public var predictionLeadMm: Double = 0
+
+  /// RMS gap between each ARKit position and the prediction for its capture time, horizontally,
+  /// millimetres, smoothed over about a second. Near ARKit's own noise when prediction works.
+  public var predictionErrorMm: Double = 0
+
   public init() {}
 }
 
@@ -87,6 +98,12 @@ public struct MotionPipeline: Sendable {
 
   /// The most undrained events kept; past it the oldest are dropped.
   static let eventCapacity = 512
+
+  /// Seconds over which prediction fades in when it becomes available, and out when it stops.
+  static let predictionBlendTime: TimeInterval = 0.25
+
+  /// m/s² per g.
+  static let standardGravity = 9.80665
 
   /// Changes take effect from the next input.
   public var settings: PipelineSettings
@@ -126,6 +143,29 @@ public struct MotionPipeline: Sendable {
 
   /// Gyro assist is on and the clocks agree, so IMU samples drive the cursor too.
   private var isAssistActive = false
+
+  /// The latest Core Motion sample's timestamp: "now" for the prediction.
+  private var latestIMUTime: TimeInterval?
+
+  // Prediction.
+  private var predictor = TranslationPredictor()
+
+  /// Core Motion's reference frame → ARKit's world, from the latest anchor frame.
+  private var referenceToWorld: simd_quatd?
+
+  /// ARKit's and Core Motion's timestamps share a clock, as of the latest attitude lookup.
+  private var clocksAgree = true
+
+  /// The latest predicted position's offset from `P`, kept while prediction is unavailable so it
+  /// can fade out.
+  private var predictionOffset = SIMD3<Double>.zero
+
+  /// How much of `predictionOffset` the cursor follows, from 0 to 1.
+  private var predictionWeight: Double = 0
+
+  /// The arrival time the prediction blend was last advanced to.
+  private var predictionClock: TimeInterval?
+  private var hasReportedSignCheck = false
 
   // Engagement.
   private var needsEngage = true
@@ -222,6 +262,12 @@ public struct MotionPipeline: Sendable {
     }
     previousARPosition = sample.position
     previousARTimestamp = sample.timestamp
+    if isGood && !isJump {
+      predictor.add(fix: integratedPosition, at: sample.timestamp, settings: settings.prediction)
+      reportSignCheck()
+    } else {
+      predictor.reset()
+    }
 
     if isNormal {
       anchorOrientation = simd_normalize(sample.quaternion)
@@ -257,8 +303,17 @@ public struct MotionPipeline: Sendable {
     inputTime = sample.arrival
     imuMeter.record(timestamp: sample.timestamp, arrival: sample.arrival)
     latestIMUArrival = sample.arrival
+    latestIMUTime = sample.timestamp
     attitudes.append(time: sample.timestamp, attitude: sample.quaternion)
     updateOrientation()
+    if let referenceToWorld, clocksAgree {
+      // Core Motion's userAcceleration is minus the kinematic acceleration, in g; the sign
+      // check confirms that before anything uses it.
+      let deviceToWorld = referenceToWorld * sample.quaternion
+      predictor.add(
+        acceleration: deviceToWorld.act(sample.userAcceleration) * -Self.standardGravity,
+        at: sample.timestamp)
+    }
 
     let pitch = ScrollTilt.pitch(gravity: sample.gravity)
     latestPitch = pitch
@@ -293,7 +348,7 @@ public struct MotionPipeline: Sendable {
     if clickFreeze.expire(imuTime: sample.timestamp) {
       needsFilterReset = true
     }
-    if isAssistActive {
+    if isAssistActive || isPredictionConfirmed {
       stepCursor(time: sample.arrival, sampleTime: sample.timestamp)
     }
     finishInput()
@@ -494,16 +549,29 @@ public struct MotionPipeline: Sendable {
 
   // MARK: - Orientation
 
-  /// Sets `R_now` (and whether gyro assist is usable) from the anchor frame and the gyro.
+  /// Sets `R_now` (and whether gyro assist is usable) from the anchor frame and the gyro, and
+  /// the reference-to-world rotation the prediction needs.
   private mutating func updateOrientation() {
     guard let anchorOrientation else { return }
+    let lookup = attitudes.attitude(at: anchorTime)
+    switch lookup {
+    case .found(let anchorAttitude):
+      // Device → world at t_k is R_k · C, and device → reference is q(t_k).
+      referenceToWorld = simd_normalize(
+        anchorOrientation * Frames.cameraFromDevice * anchorAttitude.inverse)
+      clocksAgree = true
+    case .notCovered:
+      clocksAgree = true
+    case .outOfRange:
+      clocksAgree = false
+    }
     guard settings.pointer.gyroAssist, let latest = attitudes.latest else {
       currentOrientation = anchorOrientation
       diagnostics.clockMismatch = false
       isAssistActive = settings.pointer.gyroAssist
       return
     }
-    switch attitudes.attitude(at: anchorTime) {
+    switch lookup {
     case .found(let anchorAttitude):
       // Core Motion attitudes map device → reference, so q(t_k)⁻¹ · q(now) is the rotation from
       // t_k to now in the body frame. In the camera frame it is C · ΔR · Cᵀ, applied on the right
@@ -545,7 +613,7 @@ public struct MotionPipeline: Sendable {
       refreshGate(at: time)
       return
     }
-    let point = integratedPosition + currentOrientation.act(leverInCamera)
+    let point = currentPosition(at: time) + currentOrientation.act(leverInCamera)
     let worldPoint = SIMD2(point.x, point.z) * 1000
     jitter.record(worldPoint, time: time)
     diagnostics.jitterMm = jitter.rms
@@ -603,6 +671,64 @@ public struct MotionPipeline: Sendable {
     state.cursor += increment
     diagnostics.sensorTravelMm += simd_length(travel)
     diagnostics.cursorTravelPoints += simd_length(increment)
+  }
+
+  // MARK: - Prediction
+
+  private var isPredictionConfirmed: Bool {
+    settings.prediction.isEnabled && predictor.sign != nil
+  }
+
+  /// `P` carried forward to the latest Core Motion sample by the predictor, faded in and out over
+  /// `predictionBlendTime` so turning prediction on or off never jumps the cursor.
+  ///
+  /// - Parameter time: The input's arrival time, which paces the fade.
+  private mutating func currentPosition(at time: TimeInterval) -> SIMD3<Double> {
+    let elapsed = max(0, time - (predictionClock ?? time))
+    predictionClock = max(predictionClock ?? time, time)
+    let step = elapsed / Self.predictionBlendTime
+    if let target = predictedOffset() {
+      predictionOffset = target
+      predictionWeight = min(1, predictionWeight + step)
+    } else {
+      predictionWeight = max(0, predictionWeight - step)
+    }
+    let offset = predictionOffset * predictionWeight
+    diagnostics.predictionLeadMm = simd_length(SIMD2(offset.x, offset.z)) * 1000
+    return integratedPosition + offset
+  }
+
+  /// Where the predictor puts the camera now, relative to `P`, or nil when it can't say.
+  private func predictedOffset() -> SIMD3<Double>? {
+    guard settings.prediction.isEnabled, clocksAgree, isLatestFrameGood,
+      let latestIMUTime,
+      let predicted = predictor.position(
+        at: latestIMUTime, maxHorizon: settings.prediction.maxHorizon)
+    else { return nil }
+    return predicted - integratedPosition
+  }
+
+  /// Logs the sign check's outcome once.
+  private mutating func reportSignCheck() {
+    guard !hasReportedSignCheck else { return }
+    switch predictor.signCheck.result {
+    case .pending:
+      return
+    case .confirmed(let sign, let correlation):
+      emit(.predictionChecked(sign: sign, correlation: correlation))
+    case .failed(let correlation):
+      emit(.predictionChecked(sign: nil, correlation: correlation))
+    }
+    hasReportedSignCheck = true
+  }
+
+  private var predictionStatus: PredictionStatus {
+    guard settings.prediction.isEnabled, clocksAgree else { return .off }
+    switch predictor.signCheck.result {
+    case .pending: return .checking
+    case .confirmed: return .on
+    case .failed: return .failed
+    }
   }
 
   /// Works out the cursor gate from the current conditions, books the time since the previous
@@ -699,6 +825,8 @@ public struct MotionPipeline: Sendable {
     diagnostics.imuRate = imuMeter.rate
     diagnostics.imuDelayMs = imuMeter.delay * 1000
     diagnostics.isFrozen = clickFreeze.isActive
+    diagnostics.prediction = predictionStatus
+    diagnostics.predictionErrorMm = predictor.innovationMm
     diagnostics.pitchDegrees = scrollTilt.relativePitch
     diagnostics.scrollSpeed = scrollTilt.speed
       + buttonScroll.speed(glideTime: settings.buttonScroll.glideTime)

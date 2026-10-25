@@ -222,7 +222,39 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     public init() {}
   }
 
+  /// Motion prediction: carries ARKit's late positions forward to now with Core Motion's
+  /// accelerations (see `TranslationPredictor`).
+  public struct Prediction: Codable, Equatable, Sendable {
+    public var isEnabled = true
+
+    /// How far Core Motion's acceleration may be off per 100 Hz sample, m/s², gravity leaking in
+    /// from small attitude errors included. Lower trusts the accelerometer more: steadier at rest
+    /// but slower to correct a wrong velocity. With 1 mm of ARKit noise, 0.5 left the resting
+    /// cursor 28% shakier than no prediction and 0.2 left it 6% steadier, for the same lead.
+    public var accelerationNoise: Double = 0.2
+
+    /// How far one ARKit position may be off, metres. The phone's rest wobble is 0.5–0.9 mm.
+    public var positionNoise: Double = 0.0008
+
+    /// The furthest past the latest ARKit frame the prediction reaches, seconds. Past it (ARKit
+    /// stalled) the cursor falls back to ARKit alone.
+    public var maxHorizon: TimeInterval = 0.1
+
+    public init() {}
+
+    public init(from decoder: any Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      let defaults = Prediction()
+      isEnabled = try container.decode(.isEnabled, default: defaults.isEnabled)
+      accelerationNoise = try container.decode(
+        .accelerationNoise, default: defaults.accelerationNoise)
+      positionNoise = try container.decode(.positionNoise, default: defaults.positionNoise)
+      maxHorizon = try container.decode(.maxHorizon, default: defaults.maxHorizon)
+    }
+  }
+
   public var pointer = Pointer()
+  public var prediction = Prediction()
   public var tiltScroll = TiltScroll()
   public var buttonScroll = ButtonScroll()
   public var click = Click()
@@ -239,6 +271,8 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     let defaults = PipelineSettings()
     pointer = (try? container.decodeIfPresent(Pointer.self, forKey: .pointer))
       ?? defaults.pointer
+    prediction = (try? container.decodeIfPresent(Prediction.self, forKey: .prediction))
+      ?? defaults.prediction
     tiltScroll = (try? container.decodeIfPresent(TiltScroll.self, forKey: .tiltScroll))
       ?? defaults.tiltScroll
     buttonScroll = (try? container.decodeIfPresent(ButtonScroll.self, forKey: .buttonScroll))

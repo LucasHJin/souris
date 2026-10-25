@@ -128,6 +128,13 @@ struct SyntheticSession {
   /// Seeds the noise, so every run of a test sees the same noise.
   var seed: UInt64 = 1
 
+  /// Fill in `userAcceleration` from the path. Off, it stays zero, so the prediction's sign
+  /// check never sees motion and prediction stays out of the way of tests about other things.
+  var providesAcceleration = false
+
+  /// Multiplies the `userAcceleration` the physics gives, to fake hardware with the other sign.
+  var accelerationSign: Double = 1
+
   mutating func touch(_ event: TouchEvent) {
     inserts.append((event.time + 0.002, .touch(event)))
   }
@@ -164,7 +171,20 @@ struct SyntheticSession {
       attitude: attitude.vector,
       rotationRate: rate,
       gravity: gravity,
-      userAcceleration: .zero)
+      userAcceleration: providesAcceleration ? userAcceleration(at: time) : .zero)
+  }
+
+  /// The accelerometer reads minus the specific force (−1 g along the screen normal flat and at
+  /// rest), and Core Motion takes gravity (pointing down) off that, which leaves minus the
+  /// camera's kinematic acceleration, in g, device frame.
+  func userAcceleration(at time: Double) -> SIMD3<Double> {
+    let step = 1e-3
+    let before = path.position(time - step)
+    let here = path.position(time)
+    let after = path.position(time + step)
+    let acceleration = (after - 2 * here + before) / (step * step)
+    let device = path.deviceOrientation(at: time)
+    return -accelerationSign * device.inverse.act(acceleration) / 9.80665
   }
 
   func events() -> [RecordedEvent] {

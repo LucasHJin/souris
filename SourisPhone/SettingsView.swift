@@ -73,13 +73,16 @@ struct SettingsView: View {
         displayFactor: 100,
         unit: " cm")
       Toggle("Gyro assist", isOn: $model.settings.pipeline.pointer.gyroAssist)
+      Toggle("Motion prediction", isOn: $model.settings.pipeline.prediction.isEnabled)
     } header: {
       Text("Pointer")
     } footer: {
       Text(
         "A lower Smoothing cutoff steadies the pointer at rest but adds lag. Higher "
           + "Responsiveness cuts that lag when moving fast. Swivel reach is how far ahead of the "
-          + "camera the sensing point sits.")
+          + "camera the sensing point sits. Motion prediction uses the accelerometer to move the "
+          + "pointer to where the phone is now, not where the camera saw it about 40 ms ago; it "
+          + "switches itself on after a second or so of moving.")
     }
   }
 

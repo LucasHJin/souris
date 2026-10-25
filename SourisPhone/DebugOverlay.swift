@@ -31,6 +31,9 @@ enum DebugReadout {
         + " \(number(diagnostics.arDelayMs, 6, 1)) ms",
       "IMU \(number(diagnostics.imuRate, 5, 1)) Hz \(number(diagnostics.imuDelayMs, 6, 1)) ms"
         + "  clock \(diagnostics.clockMismatch ? "MISMATCH" : "ok")",
+      "pred \(pad(diagnostics.prediction.rawValue, to: 8))"
+        + " lead \(number(diagnostics.predictionLeadMm, 5, 1)) mm"
+        + "  err \(number(diagnostics.predictionErrorMm, 5, 2)) mm",
       "jitter \(number(diagnostics.jitterMm, 5, 2)) mm"
         + "  speed \(number(diagnostics.speedMmPerSecond, 6, 0)) mm/s"
         + "  gain \(number(diagnostics.gain, 4, 2))",

@@ -56,6 +56,11 @@ public struct PipelineEvent: Equatable, Codable, Sendable {
     case paused(Bool)
 
     case recentered
+
+    /// The check of Core Motion's acceleration against ARKit's finished. `sign` is what turns
+    /// `−userAcceleration` into the kinematic acceleration (1 if the physics holds), or nil if
+    /// the two never matched and prediction stays off. `correlation` is how well they matched.
+    case predictionChecked(sign: Double?, correlation: Double)
   }
 
   /// The causing input's time: a sample's arrival, or a touch's or press's own time. Pause and

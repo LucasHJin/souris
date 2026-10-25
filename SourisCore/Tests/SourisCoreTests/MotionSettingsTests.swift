@@ -106,7 +106,9 @@ import Testing
     let data = try JSONEncoder().encode(settings)
     #expect(try JSONDecoder().decode(PipelineSettings.self, from: data) == settings)
     let keys = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
-    let groups: Set = ["pointer", "tiltScroll", "buttonScroll", "click", "lift", "tracking"]
+    let groups: Set = [
+      "pointer", "prediction", "tiltScroll", "buttonScroll", "click", "lift", "tracking",
+    ]
     #expect(Set(keys.keys) == groups)
     let lift = try #require(keys["lift"] as? [String: Any])
     #expect(lift["pivotDistance"] == nil)
