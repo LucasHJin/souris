@@ -474,8 +474,15 @@ public struct MotionPipeline: Sendable {
     case .lifted(let rollback, let rise):
       var rolledBack: Double = 0
       if settings.lift.rollsBackCursor {
-        rolledBack = simd_length(state.cursor - rollback)
-        state.cursor = rollback
+        // Undo the rise's motion, but no more than `maxRollback` of it along the same line.
+        var undo = state.cursor - rollback
+        let length = simd_length(undo)
+        let limit = max(0, settings.lift.maxRollback)
+        if length > limit {
+          undo *= limit / length
+        }
+        rolledBack = simd_length(undo)
+        state.cursor -= undo
       }
       endTiltScroll()
       emit(.lifted(riseCm: rise * 100, rolledBackPoints: rolledBack))

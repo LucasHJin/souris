@@ -25,8 +25,9 @@ struct LiftClutch: Sendable {
   enum Event: Equatable, Sendable {
     case none
 
-    /// The phone was just lifted. `rollback` is the cursor total when the rise began, and `rise`
-    /// the smaller of the two ends' gains since then, metres.
+    /// The phone was just lifted. `rollback` is the cursor total when the rise began (when the
+    /// later of the two ends started rising), and `rise` the smaller of the two ends' gains since
+    /// then, metres.
     case lifted(rollback: SIMD2<Double>, rise: Double)
 
     /// The phone was set down, `drop` metres below the lift's peak; the caller re-engages (which
@@ -123,7 +124,9 @@ struct LiftClutch: Sendable {
     peak = height
     recent.removeAll()
     recent.append(Sample(time: time, edges: edges, cursor: cursor))
-    let start = lowestFront.time <= lowestBack.time ? lowestFront : lowestBack
+    // A lift needs both ends up, so it begins when the second one starts rising. The end that
+    // rose first may have been tilting, and its earlier start would take back more than the rise.
+    let start = lowestFront.time >= lowestBack.time ? lowestFront : lowestBack
     return .lifted(rollback: start.cursor, rise: rise)
   }
 

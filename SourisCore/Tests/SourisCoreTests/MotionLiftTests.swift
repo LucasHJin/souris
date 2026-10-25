@@ -62,6 +62,27 @@ import simd
     #expect(abs(steps.finalCursor.x - 2.5 * 80) < 1, "cursor \(steps.finalCursor)")
   }
 
+  @Test func aLiftDuringAFastStrokeTakesBackAtMostMaxRollback() {
+    // Slide 10 cm right during the 0.15 s rise: 250 pt at slow gain, far past the 100 pt cap.
+    var session = SyntheticSession(duration: 3)
+    session.path.position = { time in
+      let right = 0.1 * Synthetic.ramp(time, 1, 1.15)
+      let up = 0.04 * Synthetic.ramp(time, 1, 1.15)
+      return Synthetic.rest + SIMD3(right, up, 0)
+    }
+    let steps = session.replay()
+    #expect(steps.step(at: 1.4).state.flags.contains(.lifted))
+    let rolledBack = steps.events.compactMap { event -> Double? in
+      if case .lifted(_, let rolledBack) = event.kind { return rolledBack }
+      return nil
+    }
+    #expect(rolledBack.count == 1)
+    let limit = PipelineSettings.Lift().maxRollback
+    #expect(abs((rolledBack.first ?? 0) - limit) < 1e-6, "rolled back \(rolledBack)")
+    // The cursor stays well right of where the rise began.
+    #expect(steps.cursor(at: 1.4).x - steps.cursor(at: 0.9).x > 20)
+  }
+
   @Test func withoutRollbackTheRiseMotionStays() {
     var settings = Synthetic.flatGainSettings
     settings.lift.rollsBackCursor = false
