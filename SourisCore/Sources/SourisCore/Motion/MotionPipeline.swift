@@ -474,10 +474,10 @@ public struct MotionPipeline: Sendable {
     case .lifted(let rollback, let rise):
       var rolledBack: Double = 0
       if settings.lift.rollsBackCursor {
-        // Undo the rise's motion, but no more than `maxRollback` of it along the same line.
+        // Undo the rise's motion, but no more than `rollbackLimit` of it along the same line.
         var undo = state.cursor - rollback
         let length = simd_length(undo)
-        let limit = max(0, settings.lift.maxRollback)
+        let limit = max(0, settings.lift.rollbackLimit)
         if length > limit {
           undo *= limit / length
         }

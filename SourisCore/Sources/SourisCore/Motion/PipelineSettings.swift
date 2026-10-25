@@ -173,8 +173,11 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
     public var rollsBackCursor = true
 
     /// The most a lift takes back, screen points. A lift made while moving fast would otherwise
-    /// undo the whole fast stroke (over 1,000 pt has been seen).
-    public var maxRollback: Double = 100
+    /// undo the whole fast stroke (over 1,000 pt has been seen). At 100 pt, 18 of 20 lifts in one
+    /// session hit the cap, so most of what it took back was the end of a deliberate stroke. It
+    /// was saved as `maxRollback` with that 100 pt default and no slider, so the new name lets
+    /// saved settings pick up this default.
+    public var rollbackLimit: Double = 40
 
     /// How far from the camera, along the phone's long axis toward the top edge, the front
     /// height point sits, metres.
@@ -199,7 +202,7 @@ public struct PipelineSettings: Codable, Equatable, Sendable {
       reengageSpeed = try container.decode(.reengageSpeed, default: defaults.reengageSpeed)
       reengageHold = try container.decode(.reengageHold, default: defaults.reengageHold)
       rollsBackCursor = try container.decode(.rollsBackCursor, default: defaults.rollsBackCursor)
-      maxRollback = try container.decode(.maxRollback, default: defaults.maxRollback)
+      rollbackLimit = try container.decode(.rollbackLimit, default: defaults.rollbackLimit)
       frontDistance = try container.decode(.frontDistance, default: defaults.frontDistance)
       backDistance = try container.decode(.backDistance, default: defaults.backDistance)
     }

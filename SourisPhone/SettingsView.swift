@@ -161,12 +161,21 @@ struct SettingsView: View {
         displayFactor: 100,
         unit: " cm")
         .disabled(!model.settings.pipeline.lift.isEnabled)
+      SliderRow(
+        title: "Max rollback",
+        value: $model.settings.pipeline.lift.rollbackLimit,
+        range: 0...200,
+        step: 5,
+        fractionDigits: 0,
+        unit: " pt")
+        .disabled(!model.settings.pipeline.lift.isEnabled)
     } header: {
       Text("Lift to reposition")
     } footer: {
       Text(
         "Lift the phone quickly to pause the pointer, like lifting a mouse. Set it down to "
-          + "resume.")
+          + "resume. A lift takes back the pointer motion the rise itself caused, up to Max "
+          + "rollback; 0 turns that off.")
     }
   }
 
