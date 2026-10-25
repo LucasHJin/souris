@@ -39,8 +39,9 @@ public struct ScrollWheelSettings: Codable, Equatable, Sendable {
   /// Time constant of the glide that lets out each notch's scrolling, seconds.
   public var glideTime: TimeInterval = 0.04
 
-  /// Rolling the wheel toward the top edge (away from the palm) scrolls toward the top of the
-  /// page unless this is on.
+  /// Rolling the wheel toward the top edge (away from the palm) scrolls toward the bottom of the
+  /// page, so the page moves with the fingertip, unless this is on. Until 2026-10-25 `false`
+  /// meant the reverse; flipping its meaning moves phones that saved it to the new direction too.
   public var isReversed = false
 
   /// A short tap that doesn't roll the wheel is a middle click, as pressing a mouse wheel is.
@@ -103,8 +104,8 @@ public enum ScrollWheelEvent: Equatable, Codable, Sendable {
 ///
 /// - Rolling: every `notchSpacing` points of finger travel along the strip is a notch: one haptic
 ///   tick, and `pixelsPerNotch` of scrolling times up to `maxAcceleration` the faster the finger
-///   moves. Moving toward the top edge scrolls toward the top of the page. Each notch's scrolling
-///   glides out over about `glideTime` instead of jumping.
+///   moves. Moving toward the top edge scrolls toward the bottom of the page. Each notch's
+///   scrolling glides out over about `glideTime` instead of jumping.
 /// - Momentum: a finger that lifts while moving faster than `flickSpeed` leaves the wheel spinning
 ///   at the matching notch rate. The spin slows by e every `momentumTime`, ticking and scrolling
 ///   notch by notch, and stops below `stopRate`. A finger landing on the wheel stops it.
@@ -329,7 +330,7 @@ public struct ScrollWheel: Sendable {
   private mutating func queueNotch(
     _ sign: Double, speed: Double, settings: ScrollWheelSettings
   ) {
-    let direction: Double = settings.isReversed ? -1 : 1
+    let direction: Double = settings.isReversed ? 1 : -1
     pending += sign * direction * settings.pixelsPerNotch * Self.acceleration(
       speed: speed, settings: settings)
   }

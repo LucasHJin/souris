@@ -59,9 +59,9 @@ import simd
     return result
   }
 
-  @Test func aSlowRollScrollsOneStepPerNotchTowardTheTop() {
-    // 36 pt up the screen in a second: three notches at 36 pt/s, under the slow speed.
-    let result = Self.perform(Roll(distance: -36, duration: 1))
+  @Test func aSlowRollScrollsOneStepPerNotch() {
+    // 36 pt down the screen in a second: three notches at 36 pt/s, under the slow speed.
+    let result = Self.perform(Roll(distance: 36, duration: 1))
     #expect(result.ticks == 3)
     #expect(abs(result.scrolled - 3 * Self.settings.pixelsPerNotch) < 1e-6)
     #expect(result.events.first == .touch(isDown: true, time: 0))
@@ -72,19 +72,19 @@ import simd
     let lastStop = result.events.lastIndex { if case .stop = $0 { true } else { false } }
     #expect((lastStop ?? -1) > (lastTurn ?? .max))
     #expect(!result.isTap)
-    #expect(abs(result.wheel.rotation - 3) < 1e-9)
+    #expect(abs(result.wheel.rotation + 3) < 1e-9)
   }
 
-  @Test func rollingTowardThePalmScrollsDownAndReversedFlipsIt() {
-    let down = Self.perform(Roll(distance: 36, duration: 1))
+  @Test func rollingTowardTheTopEdgeScrollsDownThePageAndReversedFlipsIt() {
+    let down = Self.perform(Roll(distance: -36, duration: 1))
     #expect(abs(down.scrolled + 3 * Self.settings.pixelsPerNotch) < 1e-6)
-    var reversed = Roll(distance: 36, duration: 1)
+    var reversed = Roll(distance: -36, duration: 1)
     reversed.settings.isReversed = true
     #expect(abs(Self.perform(reversed).scrolled - 3 * Self.settings.pixelsPerNotch) < 1e-6)
   }
 
   @Test func aFastRollScrollsMorePerNotch() {
-    var roll = Roll(distance: -120, duration: 0.1, lifts: false)
+    var roll = Roll(distance: 120, duration: 0.1, lifts: false)
     roll.settings.hasMomentum = false
     let fast = Self.perform(roll)
     #expect(fast.ticks == 10)
@@ -94,8 +94,8 @@ import simd
   }
 
   @Test func aFlickKeepsTheWheelSpinningAndTickingThenStops() {
-    let flick = Self.perform(Roll(distance: -120, duration: 0.1))
-    var noMomentum = Roll(distance: -120, duration: 0.1)
+    let flick = Self.perform(Roll(distance: 120, duration: 0.1))
+    var noMomentum = Roll(distance: 120, duration: 0.1)
     noMomentum.settings.hasMomentum = false
     let plain = Self.perform(noMomentum)
     #expect(flick.ticks > plain.ticks + 3, "\(flick.ticks) vs \(plain.ticks) ticks")
